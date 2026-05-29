@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<survey_options>
+   <options Denoised="0.00" DepthMax="Inf" DepthMin="0.00" Horizontal_slice_size="10.00"
+            Motion_correction="0.00"
+            RangeMax="Inf"
+            RangeMin="-Inf"
+            RefRangeMax="Inf"
+            RefRangeMin="-Inf"
+            Salinity="NaN"
+            Shadow_zone="0.00"
+            Shadow_zone_height="0.00"
+            Soundspeed="NaN"
+            SvThr="-999.00"
+            Temperature="NaN"
+            Vertical_slice_size="100.00"
+            Vertical_slice_units="pings"/>
+</survey_options>

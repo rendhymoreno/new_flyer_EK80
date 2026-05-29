@@ -1,0 +1,61 @@
+function sbplot_flyer_param(x,y,c1,c2,c_level,cmap_ek,cmap_p,clim_p,clim_ek,param_n)
+
+if strcmp(param_n,'temp')
+    ttl_s = 'Temperature (degree C)';
+elseif strcmp(param_n,'oxy')
+    ttl_s = 'Oxygen (mg/L)';
+elseif strcmp(param_n,'sal')
+    ttl_s = 'Salinity (g/kg)';
+elseif strcmp(param_n,'temp')
+    ttl_s = 'Density (kg/m^3)';
+end
+
+figure();
+tiledlayout(2,1,"TileSpacing","tight");
+
+ax1 = nexttile;
+h = imagesc(x, y, c2);
+if strcmp(cmap_p,'EK60')
+    cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1]; colormap(ax1,cmap);
+else
+    colormap(ax1,cmap_p)
+end
+set(h, 'AlphaData', ~isnan(c2))
+set(gca,"YDir","reverse","XTickLabel",[])
+axis tight; shading flat;
+xticks('auto');yticks('auto');
+cb1 = colorbar;
+cb1.Label.String = ttl_s;
+xlim([min(x,[],"all") max(x,[],"all")]);
+ylim([min(y,[],"all") max(y,[],"all")]);
+if isempty(clim_p) || ~exist('clim_p','var')
+    clim([min(c2,[],'all') max(c2,[],'all')])
+else
+    clim([clim_p(1) clim_p(2)])
+end
+
+grid on;
+
+ax2 = nexttile;
+[X,Y] = meshgrid(x,y);
+h2 = imagesc(x,y,c1);
+if strcmp(cmap_ek,'EK60')
+    cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1]; colormap(ax2,cmap);
+else
+    colormap(ax2,cmap_ek)
+end
+
+set(gca,"YDir","reverse")
+axis tight; shading flat;
+xticks('auto');yticks('auto');colorbar;
+clim([clim_ek(1) clim_ek(2)])
+grid on;
+hold on;
+[C,h] = contour(X,Y,c2,c_level,'k','LabelFormat','%0.1f');
+clabel(C,h,'FontSize',8,'Color','red','FontWeight','bold','LabelSpacing',1500);
+hold off;
+ylabel('Alongtrack Distance')
+xlabel()
+%contour(Xoxy,Yoxy,z_oxy,4,'k');
+
+end

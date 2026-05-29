@@ -1,0 +1,42 @@
+% FUnction to greatly reduce gps data and align it to the ping time. 
+function [lon_tx,lat_tx] = sync_gps_ekping(tempsv)
+        
+    fieldn = fieldnames(tempsv);
+    gps_fn = ismember(fieldn,'gps');
+    temp_gps = tempsv.(fieldn{gps_fn});
+    gps_t = datetime(temp_gps.time,"ConvertFrom",'datenum');
+    
+    % 
+
+
+    % Basically, if gps is shorter than pings then just exit!
+    if length(gps_t) > length(temp_dt)
+        return
+    end
+
+    %numStr = regexp(fieldn, '\d+$', 'match');    % gives index and also the freqs
+   % idx_not_empty = ~cellfun(@isempty, numStr); %index of data
+    %chnum = str2double([numStr{:}]);                  % flatten one level
+    %chname = fieldn(idx_not_empty);
+    
+    if ~any(strcmp(fieldn,'config')) % This is a derived Sv file
+        [chname,~] = EK_channel_name(tempsv);
+
+        for j=1:length(chname) % For each channel
+            temp_dt = datetime(tempsv.(chname{j}).time,"ConvertFrom","datenum");
+
+            % Interpolate gps to align with echotimes
+            % Make new lat lon vectors based on ping times (Use this for plotting gps!)
+            lat_tx.(chname{j}) = interp1(gps_t, temp_gps.lat, temp_dt, 'linear', 'extrap');
+            lon_tx.(chname{j}) = interp1(gps_t, temp_gps.lon, temp_dt, 'linear', 'extrap');
+        end
+
+    else % This is a raw file
+        % we can assume tx times of different transducers are very close /  similar, therefore only one timestamp is needed.
+        
+        temp_dt = datetime([tempsv.pings(1).time],"ConvertFrom","datenum");
+        lat_tx = interp1(gps_t, temp_gps.lat, temp_dt, 'linear', 'extrap');
+        lon_tx = interp1(gps_t, temp_gps.lon, temp_dt, 'linear', 'extrap');
+    end
+        
+end

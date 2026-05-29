@@ -1,0 +1,179 @@
+% function [f,svf] = EstimateSvf(ChannelData,PingData,ProcessedSampleData,svfParameters)
+function [f,svf] = EstimateSvf(ChannelData, ParameterData,EnvironmentData, transmitSignal, pulseCompressedData,range_vector)
+%ESTIMATESVF Estimate Sv(f) for a depth range
+%
+% CALL: [f,svf] = EstimateSvf(ChannelData,PingData,ProcessedSampleData,svfParameters)
+%
+% Inputs:
+%   PingData         =
+%   BasicProcessedData  = 
+%   svfParameters       =
+%
+% Outputs:
+%   svf = 
+%
+% Description:
+%
+%
+%
+% Examples(s):
+%   [f,svf] = EstimateSvf(ChannelData,PingData,ProcessedSampleData,svfParameters)
+%
+% References:
+%
+%
+% Created by Lars Nonboe Andersen
+%
+%
+%
+% Copyright (c) 2021 Kongsberg Maritime
+%
+% THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+% IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+% FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+% AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+% LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+% OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+% THE SOFTWARE.
+% ---------------------------------------------------------------------------
+
+% narginchk(4,4);
+% nargoutchk(0,2);
+
+% Setttings
+
+binOverlap  = 0.5;
+
+nFrequencyPoints    = 500;
+
+% minRange  = svfParameters.minRange;
+% maxRange  = svfParameters.maxRange;
+minRange=5;
+maxRange=100; 
+
+% WBT
+
+nominalTransducerImpedance  = 75;
+% wbtImpedanceRx              = ChannelData.Impedance;
+wbtImpedanceRx              = 10800;
+
+TransducerData      = ChannelData;
+% EnvironmentData     = PingData.EnvironmentData;
+% ParameterData       = PingData.ParameterData;
+
+fNom            = str2num(TransducerData.Frequency); %cal.freq_nom
+psiNom          = 10^(str2num(TransducerData.EquivalentBeamAngle)/10); %linear form of cal.effBAngle_nom_log
+gainTable       = TransducerData.Gain;
+gainNom         = 10^(gainTable(end)/10); %linear form of cal.gain_nom
+
+% These values are all singular!
+samplingFrequency   = 1/ParameterData(1).SampleInterval; %fs_dec, only one value! 
+f                   = linspace(ParameterData(1).FrequencyStart,ParameterData(1).FrequencyEnd,nFrequencyPoints)'; %Would need ParameterData.FrequencyStart and ParameterData.FrequencyEnd
+
+% if ~isfield(TransducerData,'Calibration')
+%     TransducerData.Calibration = [];
+% end
+
+psi_f   = psiNom * (fNom./f).^2; %Scaled to freq vector
+% if isempty(TransducerData.CalibrationData)
+    gain_f = gainNom * (f./fNom).^2; %Scaled to freq vector
+% else
+%     CalibrationParameters = InterpolateCalibrationParameters(ChannelData.Transducer.CalibrationData,f);
+%     gain_f  = 10.^(CalibrationParameters.gain/10);
+% end
+
+% transmitSignal          = ProcessedSampleData.transmitSignal;
+% Would need to save transmit signal per each channel
+transmitAuto            = conv(transmitSignal,flipud(conj(transmitSignal)))/norm(transmitSignal)^2;
+nTransmitAutoSamples    = length(transmitAuto);
+
+soundSpeed              = EnvironmentData.SoundSpeed;
+absorptionCoefficients  = EstimateAbsorptionCoefficients(EnvironmentData,f); %(500x139)
+lambda                  = soundSpeed'./f;
+txPower                 = [ParameterData.TransmitPower];
+
+% nSectors            = size(ProcessedSampleData.complexSamples.PC,2);
+nSectors            = min(size(pulseCompressedData,2));
+
+sampleRange         = ParameterData(1).SampleInterval*soundSpeed/2;
+minSample           = floor(minRange./sampleRange)+2;
+maxSample           = floor(maxRange./sampleRange)+2;
+
+nBinSamples         = pow2(ceil(log2(max(floor(2*[ParameterData.PulseDuration]*samplingFrequency), nTransmitAutoSamples))));
+binTime             = nBinSamples/samplingFrequency;
+
+nSamplesOverlap     = floor(binOverlap*nBinSamples);
+
+%windowFunction      = hann(nBinSamples);
+windowFunction      = cell2mat(arrayfun(@(x) hann(x),nBinSamples,'UniformOutput',false));
+windowFunctionNorm  = windowFunction./(norm(windowFunction,2)./sqrt(nBinSamples));
+
+nFFT                = nBinSamples;
+
+fftTxAutoTmp        = cell2mat(arrayfun(@(x) fft(transmitAuto,x),nFFT,'UniformOutput',false)); 
+%fftTxAuto           = FrequencyTransfer(fftTxAutoTmp,samplingFrequency,f);
+fftTxAuto = FrequencyTransfer(fftTxAutoTmp,samplingFrequency,f); %size(500x1)
+
+% svRange             = ProcessedSampleData.svRange;
+svRange=range_vector; 
+% complexSumSpread    = sum(ProcessedSampleData.complexSamples.PC,2)/nSectors .* svRange;
+complexSumSpread    = sum(pulseCompressedData,2)/nSectors .* svRange;
+
+svfPingSum          = [];
+nBins               = 0;
+
+binStartSample      = minSample;
+binStopSample       = binStartSample + nBinSamples-1;
+
+lastBin = false;
+
+windowedDataMat = [];
+prxWindows = [];
+svfWindows = [];
+
+while (~lastBin)
+    nBins = nBins+1;
+    for ii=1:length(soundSpeed)
+        if (binStopSample(ii) < maxSample(ii))
+            temp_complexSamples = complexSumSpread(:,ii);
+            complexSamples  = temp_complexSamples(binStartSample:binStopSample);
+            windowedData    = complexSamples.*windowFunctionNorm(:,ii);
+        else
+            binStopSample                       = maxSample(ii);
+            lastBin                            = true;
+            temp_complexSamples = complexSumSpread(:,ii);
+            complexSamplesTmp                   = temp_complexSamples(binStartSample(ii):binStopSample(ii));
+            nLastBinSamples                     = length(complexSamplesTmp);
+            binTime                             = nLastBinSamples/samplingFrequency;
+
+            %windowFunction                      = hann(nLastBinSamples);
+            %windowFunctionNorm                  = windowFunction./(norm(windowFunction,2)/sqrt(nLastBinSamples));
+            windowedData                        = zeros(nBinSamples(ii),1);
+            windowedData(1:nLastBinSamples)     = complexSamplesTmp.*windowFunctionNorm(:,ii)';
+        end
+
+        binCenterSample = binStartSample + floor((binStopSample - binStartSample)/2);
+
+        fftWindowTmp    = fft(windowedData,nFFT);
+        fftWindow       = FrequencyTransfer( fftWindowTmp,samplingFrequency,f );
+
+        fftWindowNorm   = fftWindow./fftTxAuto;
+        pfftWindow      = nSectors * (abs(fftWindowNorm)/(2*sqrt(2))).^2 * (1/nominalTransducerImpedance) * ( (nominalTransducerImpedance+wbtImpedanceRx)/wbtImpedanceRx )^2;
+        svfWindow       = 10*log10(pfftWindow) + 2*absorptionCoefficients.*svRange(binCenterSample) - 10*log10( txPower .* lambda.^2 .* soundSpeed .* binTime .* psi_f .* gain_f.^2 ./ (32*pi^2) );
+
+        if isempty(svfPingSum)
+            svfPingSum = 10.^(svfWindow/10);
+        else
+            svfPingSum = svfPingSum + 10.^(svfWindow/10);
+        end
+
+
+        binStartSample  = binStartSample + (nBinSamples-nSamplesOverlap);
+        binStopSample   = binStartSample + nBinSamples-1;
+    end
+end
+
+svf = 10*log10(svfPingSum /nBins);
+
+end
+    

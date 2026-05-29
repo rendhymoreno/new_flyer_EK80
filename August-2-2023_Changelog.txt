@@ -1,0 +1,41 @@
+08/02/2023 patch-- Fixed major and minor bugs and upgraded performance of the following code:
+
+example_script_noctd.m:
+	
+	* fixed issues with reading EK80 raw data from different WBT and transducers. Now the code can read any 
+	EK80 transducer + tranceiver combo agnostically without pre-specifying channel name.
+	* fixed dependency issues while reading ES/EK60 data that required EK80 data for timesync. Added options to
+	either timesync ES/EK60 data with EK80 data if needed or read ES/EK60 data as it is independently without timesync. 
+	This is done by adding/"nulling" input variables to the function (see details under es60parser_sv_withoutROV.m). 
+	* minor fix with plot titles
+	* increased compile speed by removing the redundant range array in generate_data.m
+	* removed code related to CTD stuff
+	
+Details:
+
+1. ek80parser_noctd.m
+	* now is fully compatible for reading EK80 files without dependency on having a CTD file for time correction.
+2. es60parser_sv_withoutROV.m
+	* added the option of parsing ES/EK60 data without EK80 data by nulling input variables(replacing input with []) 
+	 in the function (null 1st input-tmsync and 4th input-globalindexPath). 
+	* if you have EK80 data and want to timesync the timestamps of both of these datasets then insert the 1st input to 1 
+	(tmsync = 1) and set path of global_index.mat in the 4th input.
+3. plotEK_Echogram.m
+	* Added start date time of 1st ping to title
+4. playfunction_rms.m and generate_data.m (nested within)
+	* Created a "transducer name" dictionary that *temporarily* resolves different transducer+transceiver name combos. 
+		*priority to make this fully agnostic in future update*
+	* Implemented changes in this function to reflect in generate_data.m function as well by removing the is70 indexing that created errors
+	Now this function is fully agnostic.
+	* Removed the redundant range array in generate_data.m so now the speed of compilation is greatly increased
+	
+Future goals:
+
+1. Since there are many scenarios of running the source code for our applications, there is a possibility of converting 
+	this code to a GUI for increased readibility and end-user simplicity. However, MATLAB has a lot of dependencies 
+	on version and add-ons installed on system. * migrate to python???*	
+2. Convert playfunction_rms.m to be fully agnostic
+3. Apply EK80 time-correction (need to confirm this)
+4. Apply utilities and data-processing algorithms (filtering, etc) 
+5. Migrate the 3D scatter plot into the source code
+

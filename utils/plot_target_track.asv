@@ -1,0 +1,80 @@
+%function plot_tracks_st(data,st,tt)
+
+tt_samples = target_tracks.target_id;
+tt_pings = target_tracks.target_ping_number;
+time = datetime([TSEK80_targets.chan38.vars.timestamp],"ConvertFrom","datenum");
+range = [TSEK80_targets.chan38.range];
+r_idx_st = [singletargetdata.idx_r];
+%X_idx = pings(singletargetdata.Ping_number);
+c_t = TSEK80_targets.chan38.val;
+[X,Y] = meshgrid(time,range);
+Z = ones(length(range),length(time));
+X = X(:); Y=Y(:); Z=Z(:); c_t=c_t(:);
+
+%% Track gradient
+ping = [1:length(time)];
+grad = zeros(length(tt_samples),1);
+y = zeros(length(tt_samples),1);
+x = zeros(length(tt_samples),1);
+XQ = NaN(length(range),length(time));
+YQ = NaN(length(range),length(time));
+U = NaN(length(range),length(time));
+V = NaN(length(range),length(time));
+
+for ii = 1:length(tt_samples)
+    %for direct grad calc
+    R_val = r_idx_st(tt_samples{ii});
+    y(ii,1) = range(R_val(end))-range(R_val(1));
+    idx_v = R_val(1);
+    %t_val = time(tt_pings{ii});
+    t_val = ping(tt_pings{ii});
+    %x(ii,1) = seconds(t_val(end)-t_val(1));
+    x(ii,1) = ping(t_val(end)-t_val(1));
+    idx_u = tt_pings{ii}(1);
+    grad(ii,1) = y(ii)/x(ii);
+
+    %for quiver
+    XQ(idx_v,idx_u) = ping(tt_pings{ii}(1));
+    YQ(idx_v,idx_u) = range(R_val(1));
+    U(idx_v,idx_u) = ping(tt_pings{ii}(end))-ping(tt_pings{ii}(1));
+    V(idx_v,idx_u) = y(ii,1);
+end
+
+
+%grad(grad==0) = NaN;
+%%
+figure();
+%subplot(nrow,4,1:8)
+scatter3(X, Y, Z,4,c_t,'filled','square');
+%ss = imagesc(time, range, c_t);
+%clim([climits]);
+axis tight; %shading flat;
+view(2)
+set(gca,'YDir','reverse','XLim',[time(1) time(end)],)
+cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1]; colormap(cmap); colorbar;
+%ttl = sprintf('Targets with TS: %0.1f to %0.1f',thres_min,thres_max);
+hold on
+for i=1:length(tt_samples)
+    Y_idx = r_idx_st(tt_samples{i});
+    plot(time([tt_pings{i}]),range(Y_idx),"LineWidth",3,"Color","black")
+end
+
+%%
+[X2,Y2] = meshgrid(ping,range);
+figure(); %set(fig2,'visible','on','PaperPositionMode','auto','PaperPosition',[0 0 20 10]);  
+%s = imagesc(ping, range, c_t);
+ss = scatter(X2(:),Y2(:),3,c_t,'filled','square');
+axis tight; %shading flat;
+%view(2)
+set(gca,'YDir','reverse','XLim',[ping(1) ping(end)])
+%cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1]; colormap(cmap); 
+colormap(flipud(gray))
+colorbar;
+%ttl = sprintf('Targets with TS: %0.1f tp %0.1f',thres_min,thres_max);
+xlabel('Time (UTC)'); ylabel('Horizontal Range (m)');
+%title(ttl)
+hold on
+quiver(XQ,YQ,U,V,15,'LineWidth',2,'Color','Red')
+set(gca,"YDir","reverse")
+
+%end

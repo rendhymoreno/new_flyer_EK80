@@ -1,0 +1,59 @@
+function plot_ek_bathytrack(lon_bty, lat_bty, z_bty, lat_track, lon_track, extent, cbar)
+
+%ax1 = nexttile([2 1]);
+%figure()
+%tiledlayout(2,1,"TileSpacing","tight")
+
+imagesc(lon_bty, lat_bty, z_bty);
+ax1 = gca;
+set(gca,"FontWeight","bold","FontSize",10);
+shading flat;
+axis xy equal tight;
+clim([-1000 1000]);
+if strcmp(extent,'close')
+    xlim([round(min(lon_track))-1 round(max(lon_track))+1]);
+    ylim([min(lat_track)-1 max(lat_track)+1]);
+end
+
+colormap(ax1,cmocean('topo'));
+
+if strcmp(cbar,'on')
+    cb2 = colorbar(ax1,"southoutside"); cb2.Label.String = 'Elevation (m)';
+end
+
+%title('GEBCO bathymetry (m)')
+xlabel('Longitude')
+ylabel('Latitude')
+hold on
+%contour(lon_bty, lat_bty, z_bty, 20, 'LineWidth',1, 'ShowText','on', 'EdgeColor','white')
+plot(lon_track,lat_track,'LineWidth',2,'Color','red')
+p_str = plot(lon_track(1),lat_track(1),'LineWidth',2,'Color','red','Marker','+');
+f_str = plot(lon_track(end),lat_track(end),'LineWidth',2,'Color','red','Marker','+');
+p_lbl = text(lon_track(1),lat_track(1),'start','Color','red','FontSize',10);
+f_lbl = text(lon_track(end),lat_track(end),'end','Color','red','FontSize',10);
+hold off
+
+%{
+imagesc(lon_bty, lat_bty, z_bty);
+ax1 = gca;
+set(gca,"FontWeight","bold","FontSize",10);
+shading flat;
+axis xy equal tight;
+clim([-1000 1000]);
+%xlim([round(min(lon_track))-5 round(max(lon_track))+5]);
+%ylim([min(lat_track)-5 max(lat_track)+5]);
+colormap(ax1,cmocean('topo'));
+cb2 = colorbar(ax1,"southoutside"); cb2.Label.String = 'Elevation (m)';
+%title('GEBCO bathymetry (m)')
+xlabel('Longitude')
+ylabel('Latitude')
+hold on
+plot(lon_track,lat_track,'LineWidth',2,'Color','red')
+p_str = plot(lon_track(1),lat_track(1),'LineWidth',2,'Color','red','Marker','+');
+f_str = plot(lon_track(end),lat_track(end),'LineWidth',2,'Color','red','Marker','+');
+p_lbl = text(lon_track(1),lat_track(1),'start','Color','red','FontSize',10);
+f_lbl = text(lon_track(end),lat_track(end),'end','Color','red','FontSize',10);
+hold off
+%}
+
+end

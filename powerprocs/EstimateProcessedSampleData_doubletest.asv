@@ -1,0 +1,271 @@
+% RMS Changes: 
+% 2024/March: Changed Normalization of transmit signal in createtransmitsignal, pulse compressed each sector of complex received power
+% following Andersen 2023 and Ben Grassian code input (pers comm)
+% 2025/March: Significant Change is transmit signal removed "all" conv and changed a lot of things for EA440
+
+function [ProcessedSampleData] = EstimateProcessedSampleData_doubletest(SampleData,transdata,transdata_ch,ChannelData, ParameterData, FilterData, EnvironmentData, TVG_range_correction)
+%% Declaration of global variables
+ProcessedSampleData = struct('power_cw',[],'power_pc',[],'PhysAng_alongship',[],'PhysAng_athwartship',[],'sv_pc',[], ...
+    'ts_pc',[],'sv_cw',[],'ts_cw',[],'dr',[],'minrange',[],'maxrange',[],'startTVG',[],'absorptionCoeff',[],...
+    'svf',[],'f',[],'pulse_length',[],'frequency_center',[],'frequency_nominal',[],'Gain_nominal_dB',[], 'Gain_fc_dB',[],...
+    'BeamWidth_Minor_nominal',[],'BeamWidth_Major_nominal',[],'BeamWidth_Minor_fc',[],'BeamWidth_Major_fc',[]);
+
+frequencyCenter=(ParameterData(1).FrequencyStart + ParameterData(1).FrequencyEnd)/2;
+frequencyCenter=(ParameterData(1).FrequencyStart + ParameterData(1).FrequencyEnd)/2;
+fs = 1.5e6; %Default value taken from 
+nominalTransducerImpedance  = 75; %Nominal value sourced from Demer 2017, pyEcholab [EK80.py], and echopype [cal_params.py] (2024)
+wbtImpedanceRx              = str2double(transdata.Impedance); %% WTF!!!!!
+cal = calParmEK80(transdata_ch,ParameterData,ChannelData,frequencyCenter);
+
+%Will use these for calculating physical angles
+if any(ismember(fieldnames(cal),"angleS_minor_nom"))
+    angleS_minor_fc_lin = 10^(cal.angleS_minor_fc_log/10); %Linear alongship angle sensitivity
+    angleS_major_fc_lin = 10^(cal.angleS_major_fc_log/10); %Linear athwartship angle sensitivity
+end
+
+%match transducer filter data
+if(size(FilterData,1) > 1)
+    if(contains(FilterData(1,1).ChannelID,ChannelData.TransducerName))
+        FilterData=FilterData(1, 1:2);
+    elseif(contains(FilterData(2,1).ChannelID,ChannelData.TransducerName))
+        FilterData=FilterData(2,1:2);
+    else
+        disp('FilterData does not match channelID');
+    end
+end
+
+%% Create Transmit Signal and Pulse Compressed Signals
+transmitSignal = CreateTransmitSignal(FilterData, ParameterData, fs); %y_mf
+%transmitSignal = transmitSignal/max(abs(transmitSignal)); %Normalize like in Anderson 2021 and echopype [ek80_complex.py line 45]
+
+nSectors = min(size(SampleData(1).complexsamples));
+Y_pc = zeros(length(SampleData.complexsamples),nSectors);
+if size(SampleData.complexsamples,1) < size(SampleData.complexsamples,2) %Transpose so similar to EK80. EA440 has weird issue!
+    SampleData.complexsamples = transpose(SampleData.complexsamples);
+end
+%Y_pc2 = zeros(length(SampleData.complexsamples(:,1)),nSectors);
+
+
+%y_tx_matched = conj(flipud(y_tx));
+%val_sq=sum(abs(y_tx_matched).^2);
+%n = size(y_tx_matched,1) + size(SampleData.complexsamples,1) - 1;
+%transmitSignal = y_tx;
+s_idx = length(transmitSignal);
+for ii = 1:nSectors
+    tmp = conv(SampleData.complexsamples(:,ii),conj(flipud(transmitSignal)),"full")/(norm(transmitSignal)^2);
+    Y_pc(:,ii) = tmp(s_idx:end);
+end
+
+Y_pc_avg = sum(Y_pc,2)/nSectors;
+%pulseCompressedData = conv2(flipud(conj(transmitSignal)),1,SampleData.complexsamples)/norm(transmitSignal)^2;
+%pulseCompressedData = pulseCompressedData(length(transmitSignal):end,:); %y_pc(n,u) eq.5 in Anderson 2021
+
+%% Create Power and Angle for BB and CW (complex data)
+ProcessedSampleData.power = nSectors*(abs(double(sum(SampleData.complexsamples,2))/nSectors)/(2*sqrt(2))).^2 * ((wbtImpedanceRx+nominalTransducerImpedance)/wbtImpedanceRx)^2 * 1/nominalTransducerImpedance;
+% This power_pc equation is consistent with Anderson 2021 eq 12
+power_pc = nSectors*(abs(Y_pc_avg)/(2*sqrt(2))).^2 * ((wbtImpedanceRx+nominalTransducerImpedance)/wbtImpedanceRx)^2 * 1/nominalTransducerImpedance;
+power_pc(power_pc == 0) = 1e-20;
+ProcessedSampleData.power_pc = power_pc;
+
+if any(ismember(fieldnames(cal),"angleS_minor_nom")) %If split beam
+    if strcmp(ChannelData.BeamType,'1') && (nSectors==4) %beam type = 1 / 70 kHz transducer
+        %Original Calculation for Angle from Anderson 2021
+        complexFore         = sum(Y_pc(:,3:4),2)/2;
+        complexAft          = sum(Y_pc(:,1:2),2)/2;
+        complexStarboard    = (Y_pc(:,1) + Y_pc(:,4))/2;
+        complexPort         = sum(Y_pc(:,2:3),2)/2;
+
+        %Based on Anderson 2021
+        PhaseAngleData.alongship    = complexFore.*conj(complexAft);
+        PhaseAngleData.athwartship  = complexStarboard.*conj(complexPort);
+        ElecAngleData.alongship    = atan2(imag(PhaseAngleData.alongship),real(PhaseAngleData.alongship)); %atan2 range [-pi pi] in rad
+        ElecAngleData.athwartship    = atan2(imag(PhaseAngleData.athwartship),real(PhaseAngleData.athwartship)); %atan2 range [-pi pi] in rad
+        ProcessedSampleData.PhysAng_alongship = asind(ElecAngleData.alongship/angleS_minor_fc_lin); %degrees; angle sensitivity broadband
+        ProcessedSampleData.PhysAng_athwartship = asind(ElecAngleData.athwartship/angleS_major_fc_lin); %degrees; angle sensitivity broadband
+
+    elseif strcmp(ChannelData.BeamType,'17') && (nSectors==3) %beam type 17 / 3 quadrants: 200 kHz transducer
+        % Quadrant data: source from Simrad EK80 Interface Manual Pg. 219 and pyEcholab EK80.py line 1629
+        trx_strb = Y_pc(:,1);
+        trx_port = Y_pc(:,2);
+        trx_fore = Y_pc(:,3);
+
+        % Physical Angle Calculation: Source pyEcholab line 1629
+        PhaseAngleData.alongship    = trx_fore.*conj(trx_strb);
+        PhaseAngleData.athwartship  = trx_fore.*conj(trx_port);
+        x = atan2(imag(PhaseAngleData.alongship),real(PhaseAngleData.alongship)); %atan2 range [-pi pi] in rad
+        y = atan2(imag(PhaseAngleData.athwartship),real(PhaseAngleData.athwartship));
+        ElecAngleData.alongship    = (x+y)/sqrt(3);
+        ElecAngleData.athwartship  = y-x;
+        ProcessedSampleData.PhysAng_alongship  = asind(ElecAngleData.alongship/angleS_minor_fc_lin);
+        ProcessedSampleData.PhysAng_athwartship = asind(ElecAngleData.alongship/angleS_major_fc_lin);
+
+        % %% Angle calculation source: Simrad EK80 Interface Manual Pg. 219
+        % % Alongship angle calculations in rad
+        % y1_x = real(trx_strb).*imag(trx_fore) - real(trx_fore).*imag(trx_strb);
+        % x1_x = real(trx_fore).*real(trx_strb) + imag(trx_fore).*imag(trx_strb);
+        % y2_x = real(trx_port).*imag(trx_fore) - real(trx_fore).*imag(trx_port);
+        % x2_x = real(trx_fore).*real(trx_port) + imag(trx_fore).*imag(trx_port);
+        % % Athwartship angle calculations in rad
+        % y1_y = real(trx_port).*imag(trx_fore) - real(trx_fore).*imag(trx_port);
+        % x1_y = real(trx_fore).*real(trx_port) + imag(trx_fore).*imag(trx_port);
+        % y2_y = real(trx_strb).*imag(trx_fore) - real(trx_fore).*imag(trx_strb);
+        % x2_y = real(trx_fore).*real(trx_strb) + imag(trx_fore).*imag(trx_strb);
+        % % Electrical angle data in rad from -pi to pi
+        % ElecAngleData.alongship    = atan2(y1_x, x1_x) + atan2(y2_x, x2_x);
+        % ElecAngleData.athwartship  = atan2(y1_y, x1_y) - atan2(y2_y, x2_y);
+        % % Physical angle data in degrees
+        % ProcessedSampleData.PhysAng_alongship       = asind(ElecAngleData.alongship/(sqrt(3)*angleS_minor_fc_lin));
+        % ProcessedSampleData.PhysAng_athwartship     = asind(ElecAngleData.alongship/angleS_major_fc_lin);
+    end
+end
+
+%% Calculate Effective Pulse length for BB and CW
+%Fliplr fixed feb 28th 2020, check effective pulse length
+% ParameterData.SampleInterval = 1/fs_decimated !!!!!!
+fs_dec = fs; 
+for ii = 1:length(FilterData)
+    fs_dec = fs_dec/FilterData(ii).Decimation; %Or equivalent to fs_dec = 1/ParameterData.SampleInterval; from pyEcholab (simrad_signal_proc.py line 125)
+end
+
+autoCorrelationTransmitSignal = conv(transmitSignal,flipud(conj(transmitSignal)))/norm(transmitSignal)^2;
+autoCorrelationTransmitSignalPower = abs(autoCorrelationTransmitSignal).^2;
+effectivePulselLength  = sum(autoCorrelationTransmitSignalPower) / (max(autoCorrelationTransmitSignalPower)*fs_dec);
+%effectivePulselLength  = ParameterData.SampleInterval * sum(autoCorrelationTransmitSignalPower) / max(autoCorrelationTransmitSignalPower);
+
+transmitSignalPower = abs(transmitSignal).^2;
+effectivePulselLength_CW  = ParameterData.SampleInterval * sum(transmitSignalPower) / max(transmitSignalPower);
+
+%% Create range vector and calculate TVG gain and BB Absorption
+nSamples = length(ProcessedSampleData.power_pc);
+rangeVector = (0:nSamples-1)'*ParameterData.SampleInterval*EnvironmentData.SoundSpeed/2;
+absorptionCoefficients = EstimateAbsorptionCoefficients(EnvironmentData,frequencyCenter);
+%absorptionCoefficients = 0.01047;
+% apply TVG range correction according to Echoview, echopype, and pyEcholab: r_corr = r_uncorr - c*tau/4
+if TVG_range_correction == 1
+    range_TVG = rangeVector - EnvironmentData.SoundSpeed*ParameterData.PulseDuration/4;
+    range_TVG(range_TVG<0) = 0; %zero out negative values
+else
+    range_TVG = rangeVector;
+end
+
+startTvg = 1; %All values with ranges under 1m will be zero (log10(1) = 0)
+tvg20 = zeros(length(range_TVG), 1);
+tvg40 = zeros(length(range_TVG), 1);
+
+for index = 1:length(range_TVG)
+    if(range_TVG(index) > startTvg)
+        tvg20(index) = 20*log10(range_TVG(index)) + 2*absorptionCoefficients*range_TVG(index);
+        tvg40(index) = 40*log10(range_TVG(index)) + 2*absorptionCoefficients*range_TVG(index);
+    else
+        tvg20(index) = 0;
+        tvg40(index) = 0;
+    end
+end
+
+% %SPECTRAL DATA
+% n_multiple=10;
+% nfft=1024;
+% n_start=2000; 
+% 
+% auto_tx=conv(transmitSignal,flipud(conj(transmitSignal)))/norm(transmitSignal)^2;
+% pc_rangecompd = tvg20RangeVector.*sum(pulseCompressedData,2)/nSectors;
+% 
+% n=size(auto_tx,1)*n_multiple;
+% wind=hann(n);
+% wind_adj=wind./(norm(wind)/sqrt(n))';
+% power_n=pc_rangecompd(n_start:n_start+n-1,:);
+% spectral=fft(power_n.*wind_adj,nfft);
+% spectral= spectral./(fft(repelem(auto_tx, n_multiple), nfft));
+% % spectral= spectral./(fft(repelem(abs(auto_tx), n_multiple), nfft));
+% spectral(isinf(spectral))=[];
+% spectral = abs(fft(spectral, nfft));
+% sv_f=nSectors*(10.*log10(spectral)/(2*sqrt(2))).^2 * ((wbtImpedanceRx+nominalTransducerImpedance)/wbtImpedanceRx)^2 * 1/nominalTransducerImpedance;
+% ProcessedSampleData.spectral_sv=sv_f- 10*log10(ParameterData.TransmitPower*(EnvironmentData.SoundSpeed/frequencyCenter)^2*EnvironmentData.SoundSpeed/(32*pi^2))...
+%     - 2*(gain + 20*log10(frequencyCenter/str2num(ChannelData.Frequency))) - 10*log10(effectivePulselLength) - (str2num(ChannelData.EquivalentBeamAngle) + 20*log10(str2num(ChannelData.Frequency)/frequencyCenter));
+% spectral = spectral/sum(spectral);
+% ProcessedSampleData.spectral = spectral;
+
+%% Sv(f) calculation: Need to Check and Clarify
+[f,svf]= EstimateSvf(ChannelData, ParameterData,EnvironmentData, transmitSignal, Y_pc,rangeVector);
+ProcessedSampleData.svf=svf;
+ProcessedSampleData.f=f;
+
+%% Sv(t) and TS (t) for CW and FM
+peakGain_lin = 10^(cal.gain_nom/10); %lin form of nominal gain
+wavelength_fc = (EnvironmentData.SoundSpeed/frequencyCenter);
+wavelength_nom = (EnvironmentData.SoundSpeed/cal.freq_nom);
+effBAngle_fc_lin = 10^(cal.effBAngle_fc_log/10); %lin form of 2 way beam angle
+effBAngle_nom_lin = 10^(cal.effBAngle_nom_log/10);
+beamW_minor_fc_lin = cal.beamW_minor_fc_lin;
+beamW_major_fc_lin = cal.beamW_major_fc_lin;
+
+% Gain compensation for BB mode based on Lars Code (CRIMAC) and echopype [calibrate_ek.py line 459]
+if any(ismember(fieldnames(cal),"angleOff_minor_nom")) %Once again, if EK80
+    fac_along = (abs(-cal.angleOff_minor_nom)/(beamW_minor_fc_lin/2))^2;
+    fac_athwart = (abs(-cal.angleOff_major_nom)/(beamW_major_fc_lin/2))^2;
+    B_theta_phi_m = 0.5 * 6.0206 * (fac_along + fac_athwart - 0.18 * fac_along * fac_athwart); %log form
+    gain_BB = cal.gain_fc_log - B_theta_phi_m;
+    %gain_BB_lin = 10^(gain_BB/10);
+    gain_BB_lin = 10^((cal.gain_nom+10*log10(frequencyCenter/cal.freq_nom))/10);
+else %if not then set this to 0
+    gain_BB = 0;
+end
+%
+%{
+AA = 10*log10(ProcessedSampleData.power_pc );
+BB = tvg40;
+CC = 10*log10(ParameterData.TransmitPower*wavelength_fc^2/(16*pi^2));
+DD = 2*gain_BB;
+EE = tvg20;
+FF = 10*log10(EnvironmentData.SoundSpeed*effectivePulselLength*effBAngle_fc_lin/2);
+out = {AA '10*log10(ProcessedSampleData.power_pc )';BB 'tvg40';CC '10*log10(ParameterData.TransmitPower*wavelength_fc^2/(16*pi^2))';...
+    DD '2*gain_BB';EE 'tvg20';FF '10*log10(EnvironmentData.SoundSpeed*effectivePulselLength*effBAngle_fc_lin/2)'};
+%}
+% TS
+ProcessedSampleData.ts_pc = 10*log10(ProcessedSampleData.power_pc ) + ...
+    tvg40 - 10*log10(ParameterData.TransmitPower*wavelength_fc^2/(16*pi^2)) - 2*gain_BB; 
+
+ProcessedSampleData.ts_cw = 10*log10(ProcessedSampleData.power) + tvg40...
+    - 10*log10(peakGain_lin^2*ParameterData.TransmitPower*wavelength_nom^2/(16*pi^2)); 
+
+% Sv    
+ProcessedSampleData.sv_pc = 10*log10(ProcessedSampleData.power_pc) + tvg20...
+    - 10*log10(ParameterData.TransmitPower*wavelength_fc^2/(16*pi^2))...
+    - 10*log10(EnvironmentData.SoundSpeed*effectivePulselLength*effBAngle_fc_lin/2)...
+    - 2*gain_BB;
+
+% ProcessedSampleData.sv_pc2 = 10*log10(ProcessedSampleData.power_pc) + tvg20...
+%     - 10*log10(ParameterData.TransmitPower*(wavelength_fc^2)*EnvironmentData.SoundSpeed*effectivePulselLength*effBAngle_fc_lin*(gain_BB_lin^2)/(32*pi^2));
+
+ProcessedSampleData.sv_cw = 10*log10(ProcessedSampleData.power) + tvg20...
+    - 10*log10(peakGain_lin^2*ParameterData.TransmitPower*wavelength_nom^2/(16*pi^2))...
+    - 10*log10(EnvironmentData.SoundSpeed*effectivePulselLength_CW*effBAngle_nom_lin/2)...
+    - 2*cal.SaCorr_log;
+
+%% Append Neccesary Values
+ProcessedSampleData.absorptionCoeff=absorptionCoefficients;
+ProcessedSampleData.startTVG=startTvg;
+ProcessedSampleData.power_pc=10*log10(ProcessedSampleData.power_pc); 
+ProcessedSampleData.power_cw = 10*log10(ProcessedSampleData.power); 
+ProcessedSampleData.dr=diff(rangeVector(1:2));
+ProcessedSampleData.minrange=min(rangeVector);
+ProcessedSampleData.maxrange=max(rangeVector);
+ProcessedSampleData.pulse_length = ParameterData.PulseDuration;
+ProcessedSampleData.frequency_center = frequencyCenter;
+ProcessedSampleData.frequency_nominal = cal.freq_nom;
+ProcessedSampleData.Gain_nominal_dB = cal.gain_nom;
+if any(ismember(fieldnames(cal),"gain_fc_log"))
+    ProcessedSampleData.Gain_fc_dB = cal.gain_fc_log;
+end
+ProcessedSampleData.BeamWidth_Minor_nominal = cal.beamW_minor_nom;
+ProcessedSampleData.BeamWidth_Major_nominal = cal.beamW_major_nom;
+ProcessedSampleData.BeamWidth_Minor_fc = cal.beamW_minor_fc_lin;
+ProcessedSampleData.BeamWidth_Major_fc = cal.beamW_major_fc_lin;
+ProcessedSampleData = rmfield(ProcessedSampleData,'power');
+ProcessedSampleData.t_eff = effectivePulselLength;
+ProcessedSampleData.sample_interval = ParameterData.SampleInterval;
+
+%ProcessedSampleData.roffset = tvgDelay/2; %I don't think this is important
+%ProcessedSampleData.epl = effectivePulselLength;        %Don't think this is important either
+%ProcessedSampleData.epl_cw = effectivePulselLength_CW;  %Don't think this is important either
+

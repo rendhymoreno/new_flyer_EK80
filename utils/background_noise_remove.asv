@@ -1,0 +1,105 @@
+% P(i,j) = original backscatter data matrix where:
+% i = ping number of original data
+% j = depth sample of original data
+% note: notation of i,j does not mean i = rows and j = columns.
+% M = # of samples in depth of window
+% N = # of pings of window
+% Pm(k,l) = mean Power averaged window matrix; this represents the average
+%   backscatter over the moving window with horizontal size N and vertical size N.
+%   This matrix estimates the "background noise" from averages of
+%   backscatter of samples in the window. 
+% k = window index in x-direction (represents the central ping number N/2 of the original data; where if k == 1, 
+%   then k represents the index of the first window, mapped to the N/2th ping of the original data).
+%   Mathematically this can be written: Pm(k = 1, l = 1) = P(i = N/2, all depth samples in window M)
+%   Another way to see it is k == 2 is the second window in the x-direction
+%   and represents P(i = N/2+1, all depth samples in window M)
+% l = window index in the y-direction (depth direction). The index can be
+%   interpretted as the window number for a certain ping in the y-direction.
+%   Example: l = 1 means the first window that covers samples from the surface up to M. l = 2 is the second window under it 
+%   that covers depth from samples M+1 to  2*M and so forth. The windows
+%   does not overlap in the y-direction unless the last window where M size does
+%   not match the remaining original samples number.
+
+function noise_reshape = background_noise_remove_RMS(svdata,trans,depth_samples,ping_samples,max_noise)
+
+chan = fieldnames(svdata)
+
+for ch = 1:length(chan) %do for all channels
+
+if trans == 'ES60' || 'EK60'
+    sv_data = svdata.(chan{ch}).Sv
+elseif trans == 'EK80'
+    sv_data = svdata.(chan{n}).val2
+end
+
+noise_max = -125;
+N = 2; M = 2;
+k_max = (size(sv_data,2)-N)+1; %total number of windows in the x-direction/pings
+l_max = ceil(size(sv_data,1)/M); %  the number of windows in depth/last window index in y-direction
+
+% start of averaging window
+for k=1:k_max
+    for l=1:l_max
+        if l == 1 %for 1st window in depth
+            %j_start = k; j_end = k+M-1;
+            j_start = 1; j_end = M;
+            i_start = k; i_end = k+N-1;
+            Pm(l,k) = sum(sv_data(j_start:j_end,i_start:i_end),"all")/(N*M);
+        elseif l == l_max %for last window in depth
+            %i_start = l*N+1; i_end = N+l*N;
+            j_start = size(sv_data,1)-M+1; j_end = size(sv_data,1);
+            i_start = k; i_end = k+N-1;
+            Pm(l,k) = sum(sv_data(j_start:j_end,i_start:i_end),"all")/(N*M);
+        else %everything else
+            j_start = l*M+1; j_end = M+l*M;
+            i_start = k; i_end = k+N-1;
+            %i_start = l*N+1; i_end = N+l*N;
+            %j_start = k; j_end = k+M-1;
+            Pm(l,k) = sum(sv_data(j_start:j_end,i_start:i_end),"all")/(N*M);
+        end
+    end
+end
+
+% Noise matrix [Noise(k)] and reshaping into Noise(i):
+% We need to reshape noise(k) into noise(i) [from window to actual ping data]! 
+% Remember that noise level for [all pings < N/2] will be equal to Pm(k=1) and 
+% noise level for pings from [Last ping - N/2 to Last Ping] will be equal
+% to Pm(k=end). Therefore, the noise matrix will be reshaped to get all
+% the representative noise values of pings from the original sample data.
+
+noise = min(Pm); %Noise(k)
+for kk = 1:length(noise)
+    if noise(kk) > noise_max
+        noise(kk) = noise_max;
+    end
+end
+
+noise_reshape = zeros(size(sv_data)); %new noise matrix with similar size to original data
+for ii = 1:size(sv_data,1)
+    if N == 2 %special case if N is 2 samples (highly unlikely)
+        noise_reshape(ii,ceil(N/2):length(noise)) = noise(ii);
+        noise_reshape(ii,1) = noise(1);
+        noise_reshape(ii,(end-ceil(N/2)):end) = noise(end);
+    end
+    if mod(N,2) ~= 0 %if N is odd number
+        noise_reshape(ii,ceil(N/2):length(noise)) = noise(ii);
+        noise_reshape(ii,1:ceil(N/2)-1) = noise(1);
+        noise_reshape(ii,(end-floor(N/2)):end) = noise(end);
+    else %if N is even
+        noise_reshape(ii,N/2:length(noise)) = noise(ii);
+        noise_reshape(ii,1:(N/2)-1) = noise(1);
+        noise_reshape(ii,(end-(N/2))+1:end) = noise(end);
+    end
+end
+
+
+% Removing noise from original data
+
+end
+
+end
+
+
+
+
+

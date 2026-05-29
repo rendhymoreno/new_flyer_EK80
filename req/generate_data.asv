@@ -1,0 +1,107 @@
+function data = generate_data(indexer, index_type, idx, transducer, data_type, file_directory)
+%chan70 = 'EKA 264029-0F ES70-18CD'; %old
+%chan200 = 'EKA 264029-70 ES200-7CDK-Split'; %old fix this!!!!
+%chan38 = 'EKA 264029-07 ES38-18DK-Split';
+%chan70 = 'EKA 279928-0F ES70-18CD';
+%chan200 = 'EKA 279928-70 ES200-7CDK-Split';
+
+%tdc = inputname(4); %to know which channel
+
+%Create Data Index (ind = indexes all pings from all channels taken from global_indexer)
+
+
+if(~strcmp(index_type,'timestamp'))
+    for i=1:length(idx)
+        if(i == 1)
+            ind=eval( strcat('[indexer.', index_type, ']'))==idx(i); %this queries "ind" according to 1st "index_type"/cast
+        else
+            ind=or(ind, eval( strcat('[indexer.', index_type, ']'))==idx(i));
+        end
+    end
+else
+    indlow = eval( strcat('double([indexer.', index_type, '])')) >= double(min(idx));
+    indhigh =eval( strcat('double([indexer.', index_type, '])')) <= double(max(idx));
+    ind=and(indlow,indhigh);
+end
+
+%Assign Channel (indexes just the channel of interest)
+
+for i = 1:length(indexer)
+    ind(i) = strcmp(indexer(i).channel, transducer);
+end
+
+data_index =  indexer(ind);
+
+%Create Data from directory files
+files = extractfield(data_index, 'file'); %extracts filenames as a cell w/ each cell a char array
+files = unique(files);
+
+data.channel = data_index(1).channel; 
+data.vars = rmfield(data_index, {'ping_global','ping_local','file','var','channel'}); %remove fields in brackets
+
+for i = 1:length(files) %repeat all filenames
+    file= files{1,i};
+    load(fullfile(file_directory, file)); %load the filename.mat
+    index_file = data_index(strcmp({data_index.file}, file)); %index all cells that are associated w/ filename
+    pings_file = [index_file.ping_local];
+    
+    if(i==1)
+        %val = [pings(pings_file).(data_type)]; %saving value (dependent on data_type) of all pings from "pings.mat" for 1st file
+        tempval = {pings(pings_file).(data_type)}; %Uneven lengths
+        dR = unique([pings(pings_file).dr]);
+        maxR = max([pings(pings_file).maxrange]);
+        r= (0:dR:maxR)'; %this is where repetitive depth values are stored. Now an issue with Matlab 2024a
+        if isfield(pings(pings_file),'pulse_length')
+            %2026-4-7: Some cal variables became issue in Matlab 2024a with MSET flyer data???
+
+            cal.pulse_length = unique([pings(pings_file).pulse_length]);
+            cal.freq_center = unique([pings(pings_file).frequency_center]);
+            cal.freq_nominal = unique([pings(pings_file).frequency_nominal]);
+            cal.G0 = unique([pings(pings_file).Gain_nominal_dB]);
+            cal.G_fc = unique([pings(pings_file).Gain_fc_dB]); %2026-4-7: This was commented now, it should work and is necessary for single targets
+            cal.BW_Minor_nom = unique([pings(pings_file).BeamWidth_Minor_nominal]);
+            cal.BW_Major_nom = unique([pings(pings_file).BeamWidth_Major_nominal]);
+            cal.BW_Minor_fc = unique([pings(pings_file).BeamWidth_Minor_fc]); %2026-4-7: This was commented now, it should work and is necessary for single targets
+            cal.BW_Major_fc = unique([pings(pings_file).BeamWidth_Major_fc]); %2026-4-7: This was commented now, it should work and is necessary for single targets
+            %cal.t_eff = unique([pings(pings_file).t_eff]); %Don't know why this became an issue in Matlab 2024a(Nov2024)
+            cal.sample_interval = unique([pings(pings_file).sample_interval]); %2026-4-7: This was commented now, it should work and is necessary for single targets
+        end
+    else
+        tempval = horzcat(tempval,eval(strcat('{',index_file(1).var,'(pings_file).',data_type,'}')));
+        %val = horzcat(val,  eval(strcat('[',index_file(1).var,'(pings_file).',data_type,']'))); %2nd & consecutive files are stacked horizontally 
+    end
+    eval(['clear ' index_file(1).var]);
+    %fprintf('[EK80 Parameter] processed channel %s file %.0f / %.0f\n',transducer,i,length(files));
+    %disp(['[EK80 Parameter] Finished reading file ' int2str(i) ' of ' int2str(length(files))]);
+end
+
+% Process Val cell
+num_smp = unique(cellfun(@numel, tempval));
+maxLen = max(num_smp);      % longest length
+%if length(num_smp)>1
+    val = cell2mat(cellfun(@(v) [v; NaN(maxLen-numel(v),1)],tempval,'UniformOutput', false));
+%else
+%    val = [pings(pings_file).(data_type)];
+%end
+clear tempval;
+
+%Remove -inf in last range bin for compressed 200 khz data
+% if(strcmp(transducer, chan200))
+if(val(size(val,1),1) == -Inf)
+    val=val(1:size(val,1)-1,:);
+    r=r(1:size(r,1)-1,:);
+end
+% end
+
+%Assign data and process flags
+data.val=val;
+if exist('cal','var') == 1
+    data.cal = cal;
+end
+data.range=r(:,1); %make sure only need (1,n) vector
+data.type = data_type; 
+%data.tvg = 'false';
+%data.range_avg = 'false';
+%data.ping_avg= 'false';  
+%data.surf_rej= 'false';  
+

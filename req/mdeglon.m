@@ -1,0 +1,6 @@
+function dx = mdeglon(lat)
+
+	latrad = lat*2*pi/360 ;
+	dx = 111415.13 * cos(latrad) ...
+		- 94.55 * cos(3.0*latrad) ...
+		+ 0.12 * cos(5.0*latrad);

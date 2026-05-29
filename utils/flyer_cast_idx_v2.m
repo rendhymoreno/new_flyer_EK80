@@ -1,0 +1,143 @@
+function [outdata, ncast_num, idx_output, tcast] = flyer_cast_idx_v2(depth,cast,depth_thres)
+% flyer_cast_idx - Remap casts in one channel to clean up noisy cast indices.
+% INPUT:
+%   data    : struct with per‑channel data (fields .vars, .range, .val, .cast)
+%   channel : 1, 2, or 'all' (only 1 or 2 allowed here)
+% OUTPUT:
+%   outdata    : data with new cast numbers in .vars.cast_new
+%   ncast_num  : new cast identity numbers
+%   idx_output : [start, end] global indices per new cast
+%   tcast      : 'upcast' or 'dcast'
+
+castID = unique(cast);
+nCasts = length(castID);
+
+
+% Check if the range between depths are larger than a depth threshold, then likely the flyer was doing a transect. 
+% If not, then exit the function!
+if abs(max(depth) - min(depth)) < depth_thres
+    fprintf('[Fix cast] Flyer does not seem to transect. Exiting...\n');
+    return;
+end
+
+%figure(); plot(depth);
+% Build original start/end indices for each cast
+cast_idx_list = zeros(2, nCasts);
+for k = 1:nCasts
+    idx = (cast == castID(k));
+    r   = find(idx);
+    cast_idx_list(1,k) = r(1);
+    cast_idx_list(2,k) = r(end);
+end
+
+% Simple trend estimator for upcast or downcast:
+% 1-D fit
+p = polyfit(1:length(depth), depth, 1);
+
+% Test fit figure
+% y_trend = polyval(p, 1:length(depth));
+% figure()
+% plot(1:length(depth), depth, 'o', 1:length(depth), y_trend, '-')
+% grid on
+% legend('Original Data', 'Linear Trendline')
+
+if p(1) < 0
+    tcast = 'upcast';
+else
+    tcast = 'dcast';
+end
+fprintf('[Fix cast] Detected %scasts\n', tcast);
+
+% Using moving Standard Deviation
+figure(); findpeaks(depth, 'MinPeakHeight', 50); 
+
+[pks, locs, widths, borders] = findpeaks(depth,'MinPeakHeight', 50,'WidthReference','halfheight'); 
+
+% 'borders' contains the [left_index, right_index] of the peak base
+start_idx = round(borders(1));
+end_idx = round(borders(2));
+figure()
+plot(depth)
+hold on
+plot(locs, pks, 'rv') % Peak tip
+xline(round(locs-widths*0.5), '--r', 'Start of Rise')
+xline(round(locs+widths*0.5), '--b', 'End of Fall')
+
+
+if strcmp(tcast, 'upcast')
+    [~, f_loc] = findpeaks(depth, 'MinPeakProminence', 10);
+    s_loc = [1, f_loc];
+    cast_new_idx = [s_loc; [f_loc-1, length(depth)]];  % start:end
+else  % 'dcast'
+    [~, f_loc] = findpeaks(depth, 'MinPeakProminence', 10);
+    s_loc = [1, f_loc+1];
+    %cast_new_idx = [s_loc; [f_len = length(depth)]];
+    cast_new_idx = [s_loc; f_loc, length(depth)];    
+end
+
+% Assign new cast IDs
+nSegs      = size(cast_new_idx, 2);
+ncast_num  = castID(1) : (castID(1) + nSegs - 1);
+idx_output = cast_new_idx(1:2, :);
+
+% Build new_cast vector for this channel
+new_cast = zeros(size(depth));
+for j = 1:nSegs
+    i1 = cast_new_idx(1,j);
+    i2 = cast_new_idx(2,j);
+    if i1 == i2
+        % Single point; check neighbors
+        if i1 == 1
+            cond1 = (abs(depth(i1) - depth(i1+1)) < 50);
+            cond2 = true;
+        elseif i1 == numel(depth)
+            cond1 = true;
+            cond2 = (abs(depth(i1) - depth(i1-1)) < 50);
+        else
+            cond1 = (abs(depth(i1) - depth(i1+1)) < 50);
+            cond2 = (abs(depth(i1) - depth(i1-1)) < 50);
+        end
+        if cond1 && cond2
+            new_cast(i1) = ncast_num(j);
+        elseif ~cond1 && cond2 && j > 1
+            new_cast(i1) = ncast_num(j-1);
+        elseif cond1 && ~cond2 && j < nSegs
+            new_cast(i1) = ncast_num(j+1);
+        else
+            new_cast(i1) = ncast_num(j);
+        end
+    else
+        % Segment: check endpoints
+        if i1 == 1 || i1 == numel(depth)
+            cond1 = true;
+        else
+            cond1 = (abs(depth(i1) - depth(i1+1)) < 50);
+        end
+        if i2 == numel(depth) || i2 == 1
+            cond2 = true;
+        else
+            cond2 = (abs(depth(i2) - depth(i2-1)) < 50);
+        end
+
+        if cond1 && cond2
+            new_cast(i1:i2) = ncast_num(j);
+        elseif ~cond1 && cond2 && j > 1
+            new_cast(i1+1:i2) = ncast_num(j);
+            new_cast(i1)      = ncast_num(j-1);
+        elseif cond1 && ~cond2 && j < nSegs
+            new_cast(i1:i2-1) = ncast_num(j);
+            new_cast(i2)      = ncast_num(j+1);
+        else
+            new_cast(i1:i2) = ncast_num(j);
+        end
+    end
+end
+
+% Write new cast numbers back into output
+for l = 1:length(depth)
+    outdata.(chName).vars(l).cast_new = new_cast(l);
+end
+
+fprintf('[Fix cast] Finished remapping casts for channel: %s\n', chName);
+
+end

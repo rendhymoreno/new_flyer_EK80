@@ -1,0 +1,71 @@
+%This is a test function but does not have full functionality yet!
+function pitch_roll_staroddi(fname,outpath,mode)
+clear all
+%fname = 'E:\2023_Bermuda\Dive3_7182023\StarOddi\Payload\7182023_DIve3_testdata.txt';
+%outFname = 'E:\2023_Bermuda\Dive3_7182023\StarOddi\Payload\7182023_DIve3_testdata.mat';
+fid = fopen(fname,'rt');
+head_char = fgets(fid);
+hd_dmter = sprintf('\t');
+N = numel(strfind(head_char,hd_dmter)) + 1;
+head = strtrim(strsplit(head_char,'\t'));
+msg = sprintf('Detected %u parameters in file: %s',N,strtrim(head_char));
+disp(msg)
+%frewind(fid);
+%%
+%fmthead = '%s';
+%head = textscan(fid,fmthead, N, 'delimiter', '\t'); % tab delimited
+%N = length(head{1});
+fmtdata = '%f';
+for ii = 1:N-1
+    fmtdata = append(fmtdata,'%f');
+end
+
+data = textscan(fid,fmtdata, 'delimiter', '\t'); % tab delimited
+fclose(fid);
+
+data_ind = {'Date & Time';
+    'Temp(°C)';
+    'Depth(m)';
+    'Tilt-X(°)';
+    'Tilt-Y(°)';
+    'Tilt-Z(°)';
+    'EAL';
+    'Comp.Head(°)';
+    'Comp.4p(°)';
+    'Inclination(°)';
+    'Mag.vec(nT)';
+    'Roll(°)'};
+
+n_head = {'timeexcel', 'temp', 'depth', 'tiltx', 'tilty','tiltz',...
+    'EAL','heading','comp4p','inclination','magvecNT','roll'};
+    
+%%
+ind = ismember(data_ind,head{1});
+
+for i=1:12
+    if (ind(i))
+        ctd.(n_head{i}) = data{ind(i)};
+    else
+        ctd.(n_head{i}) = [];
+    end
+end
+%%
+if isfield(ctd, 'timeexcel') && ~isempty(ctd.timeexcel)
+    ctd.timedt = datetime(ctd.timeexcel,'ConvertFrom','excel');
+    ctd.timenum = datenum(datetime(ctd.timeexcel,'ConvertFrom','excel'));
+    %ctd.time_utc = datenum(ctd_timeloc);
+end
+
+%%
+%if mode == 'rollpitch'
+%    rmfield
+%end
+if strcmp(outpath(end),'\')
+    outpath = outpath(1:end-1);
+end
+save(append(outpath,'\'),'-struct','ctd');
+end
+msg = sprintf('CTD .mat file has been saved in %s',outFname);
+disp(msg)
+
+end

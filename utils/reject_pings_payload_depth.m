@@ -1,0 +1,46 @@
+function dataout = reject_pings_payload_depth(dataEK80,depth_tol)
+
+dataout = dataEK80;
+chan = fieldnames(dataEK80);
+
+for ch = 1:length(chan)
+    datain = dataEK80.(chan{ch}).val;
+    vars = dataEK80.(chan{ch}).vars;
+    vars_fn = fieldnames(vars);
+    depth = [vars.depth];
+    %histogram(depth,100,Normalization="percentage")
+    
+    [hc,edges] = histcounts(depth);
+    %b = bar(edges(2:end),hc);
+    %histogram(hc)
+    % percent of total for each bar
+    %s = compose('%.1f%%', hc / sum(hc) * 100);
+    %yOffset = 5; % tweat, as necessary
+    %text(b.XData, b.YEndPoints + yOffset,s);
+
+    [hc_count,max_d_idx] = max(hc);
+    dpt_max = (edges(max_d_idx)+edges(max_d_idx+1))/2;
+    edges(max_d_idx);
+    edges(max_d_idx+1);
+    fprintf('[reject_pings_payload_depth] Maximum number of pings are detected at depth %0.1f m (%0.1f%% of distribution).\n',...
+        dpt_max,hc_count*100/sum(hc))
+    fprintf('[reject_pings_payload_depth] Rejecting pings outside depths +- %0.2f m \n',depth_tol/2);
+    %depth_tol = 0.5;
+    valid_bins = depth < (dpt_max + depth_tol/2) & depth > (dpt_max - depth_tol/2);
+    
+    sum_retained = sum(valid_bins);
+    sum_removed = length(depth)-sum_retained;
+    fprintf('[reject_pings_payload_depth] Retained %i pings (%0.1f%%) \n',sum_retained,sum_retained*100/length(depth))
+    %[vars(valid_bins)] = deal(NaN);
+    new_vars = vars;
+    for i = 2:length(vars_fn)
+        [new_vars(~valid_bins).(vars_fn{i})] = deal(NaN);
+        %[new_vars(~valid_bins).(vars_fn{i})] = deal([]);
+    end
+    %vars(valid_bins) = NaN;
+    %new_vars = vars;
+    new_val = datain;
+    new_val(:,~valid_bins) = -999;
+    dataout.(chan{ch}).val = new_val;
+    dataout.(chan{ch}).vars = new_vars;
+end

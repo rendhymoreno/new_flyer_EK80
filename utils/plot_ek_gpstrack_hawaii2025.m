@@ -1,0 +1,80 @@
+function plot_ek_gpstrack_hawaii2025(svdata,gpstrack,lon_bathy_s,lat_bathy_s,z_bathy_s)
+
+VLA_pos = [20.0845190, -155.9702641];
+% Kawaihae 
+%kawaihae_lonlat = [-155.8290952 20.0382423];
+
+if ~isempty(gpstrack)
+    lat = [gpstrack.lat];
+    lon = [gpstrack.lon];
+end
+
+chan = fieldnames(svdata);
+
+if any(ismember(chan,'val'))
+    time_ea = [svdata.vars.datetime];
+    range_ea = [svdata.range];
+    sv = [svdata.val];
+    lat = [svdata.vars.lat];
+    lon = [svdata.vars.lon];
+%elseif ismember(chan,'val') % If svdata has channels
+end
+
+
+
+fig1 = figure('Position',[2 50 838 896]);
+tl1 = tiledlayout(2,1,"TileSpacing","tight");
+ax1 = nexttile;
+imagesc(time_ea,range_ea,sv)
+set(gca,"FontSize",14,"CLim",[-85 -55]);
+axis tight; shading flat;
+cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1]; ax1.Colormap = colormap(cmap);
+cb1 = colorbar; cb1.Label.String = 'Sv (dB ref 1m^2)';
+ylabel('Depth (m)');
+xlabel('Time (UTC)');
+hold on
+ln1 = plot([time_ea(1) time_ea(1)],[range_ea(1) range_ea(end)],'black','LineWidth',2); %5-5-2025
+ln2 = plot([time_ea(end) time_ea(end)],[range_ea(1) range_ea(end)],'black','LineWidth',2); %5-5-2025
+tx1 = text(time_ea(1)-0.001,range_ea(1)-20,'a','FontWeight','bold','FontSize',12);%5-5-2025
+tx2 = text(time_ea(end)-0.001,range_ea(1)-20,'b','FontWeight','bold','FontSize',12);%5-5-2025
+%tx1 = text(0.1476,-14.0465,'a','FontWeight','bold','FontSize',12);%3-5-2025
+%tx2 = text(0.1938,-15.5349,'b','FontWeight','bold','FontSize',12);%3-5-2025
+%tx1 = text(0.1476,-14.0465,'a','FontWeight','bold','FontSize',12);%3-7-2025
+%tx2 = text(0.1938,-15.5349,'b','FontWeight','bold','FontSize',12);%3-7-2025
+%tx1 = text(0.2284,-13.3831,'a','FontWeight','bold','FontSize',12);%3-7-2025
+%tx2 = text(0.2394,-18.0309,'b','FontWeight','bold','FontSize',12);%3-7-2025
+
+ax2 = nexttile;
+imAlpha=ones(size(z_bathy_s));
+imAlpha(isnan(z_bathy_s))=0;
+imagesc(lon_bathy_s,lat_bathy_s,z_bathy_s,'AlphaData',imAlpha);
+cb2 = colorbar; cb2.Label.String = 'Depth(m)'; 
+ax2.Colormap = colormap("turbo");
+set(gca,"YDir","normal","CLim",[-700 -400],"FontSize",14);
+set(gca,"XLim",[-156.0033 -155.9329],"YLim",[19.9812   20.1474]); %3-5-2025
+%set(gca,"XLim",[-156.0184 -155.9694],"YLim",[20.0255 20.1009]); 5-5-2025
+ylabel('lat (dd)');
+xlabel('Lon (dd)');
+grid on;
+hold on
+plot(lon,lat,'k-','LineWidth',2);
+%plot(gpstrack.lon(1:20:end),gpstrack.lat(1:20:end),'bo')
+vla = plot(VLA_pos(2),VLA_pos(1),"Color",[0.9 0.9 0.9],"Marker","pentagram","LineWidth",3,"MarkerEdgeColor","black");
+
+% Will need to change this!
+txa = text(lon(1),lat(1),'a','FontWeight','bold','FontSize',12);
+txb = text(lon(end),lat(end),'b','FontWeight','bold','FontSize',12); %5-5-2025
+%tx3 = text(-155.9802,20.0907,'a','FontWeight','bold','FontSize',12); %5-5-2025
+%tx4 = text(-156.0090,20.0413,'b','FontWeight','bold','FontSize',12); %5-5-2025
+%tx3 = text(-155.9418,20.0540,'a','FontWeight','bold','FontSize',12); %3-5-2025
+%tx4 = text(-155.9871,20.0666,'b','FontWeight','bold','FontSize',12); %3-5-2025
+%tx3 = text(-155.9725,20.0669,'a','FontWeight','bold','FontSize',12); %3-7-2025
+%tx4 = text(-155.9764,20.0508,'b','FontWeight','bold','FontSize',12); %3-7-2025
+
+ax1.Colormap = cmap;
+title(tl1,'Transect 5-May-2025');
+cb2.Position = [0.8814 0.1089 0.0191 0.3716];
+%plot(trk_552025_ea.lon,trk_552025_ea.lat,'k-') %Original
+%text(trk_552025_ea.lon + 0.001, trk_552025_ea.lat + 0.001, string(trk_552025_ea.Time));
+
+end

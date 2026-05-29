@@ -1,0 +1,413 @@
+function svEK80_flyer_filt = flyer_filter_IN_new(datain, angle, cast_proc, crange, depth_interval, method, thres, r_start, r_end, plot_fig)
+chk = fieldnames(datain);
+if numel(fieldnames(datain)) > 1
+    datain = rmfield(datain,chk{2});
+end
+
+fn = char(fieldnames(datain));
+if strcmp(fn(1:4),'chan')
+    [datain,cl,ci,ctype] = flyer_cast_idx(datain, 1); % obtain casts and fix the cast numbering
+    datain = flyer_query_castData(datain, 1, ci, cl);
+end
+
+cast_list = fieldnames(datain);
+for k=1:length(cast_list)
+    cast_num(k) = str2double(cast_list{k}(2:end));
+end
+chan_data = string(fieldnames(datain.(cast_list{1})));
+chan_ang = string(fieldnames(angle));
+if ismember(chan_data,chan_ang)
+    chan_id = find(chan_ang == chan_data);
+else
+    error('Channel between data and angle is not consistent!')
+end
+if isempty(cast_proc)
+    cast_proc = cast_num;   
+end
+time = datetime([angle.(chan_data{chan_id}).vars.timestamp],"ConvertFrom","epochtime","TicksPerSecond",1e6);
+range = [angle.((chan_data{chan_id})).range];
+vars = [angle.((chan_data{chan_id})).vars];
+ang_val = [angle.((chan_data{chan_id})).val];
+depth = [vars.depth];
+if ~isfield(vars,'cast_new')
+    [angle,~,~] = flyer_cast_idx(angle, 1);
+    vars = [angle.((chan_data{chan_id})).vars];
+end
+%% Check for angle data if its correct
+if ~strcmp(angle.(chan_ang{1}).type,'PhysAng_alongship') && ~strcmp(angle.(chan_ang{1}).type,'PhysAng_athwartship')
+    error('Angle data is not detected as an input')
+else
+    angleflag = 1;
+end
+for n=1:length(cast_proc)
+    if n==1
+        fprintf('Detected %d casts',length(cast_proc))
+        fprintf(': %s\n',join(string(cast_proc)));
+        
+    end
+    cast_plt_idx = ~ismember(cast_num,cast_proc(n));
+    cast_proc2 = cast_list(cast_plt_idx);
+    data_proc = rmfield(datain,cast_proc2);
+    if n==1
+        svEK80_flyer_filt = data_proc;
+    end
+    %data_proc = flyer_combine_casts(data_proc); %Do this in the end
+    %% Parse angle cast and depth data
+    c_idx = ismember([vars.cast_new],cast_proc(n));
+    ang_proc = ang_val(:,c_idx);
+    ang_t = time(c_idx);
+    dep_proc = depth(c_idx);
+    val_cast = data_proc.(sprintf('C%d',cast_proc(n))).(chan_data).val;
+    vars2 = [vars(c_idx)];
+    idx_proc = find(c_idx == 1); %Index of casts
+    try
+        if ~isempty(depth_interval)
+            d_idx = dep_proc > depth_interval(1) & dep_proc < depth_interval(2);
+            %c_idx = c_idx & c_idx_2; %intersect between depth and cast
+            ang_proc = ang_proc(:,d_idx);
+            ang_t = ang_t(d_idx);
+            dep_proc = dep_proc(d_idx);
+            val = val_cast(:,d_idx);
+            vars2 = [vars(c_idx)];
+            idx_proc_d = find(d_idx == 1); %Index of casts; This maps directly to data_proc indexes
+        end
+        %% Calculate angle average
+        ang_avg = mean(ang_proc,1);
+        %% Reformat struct for Val and Angle based on queries / useless??
+        data_ang.(chan_data) = angle.(chan_data); %useless
+        data_ang.(chan_data).val = ang_proc; %useless
+        data_ang.(chan_data).vars = vars2; %useless
+        out_filt = val; %Final output / whole data for cast
+        % data_filt = data_proc;
+        % data_filt.(chan_data).val = val;
+        %% Figure
+        
+        if plot_fig == 1
+            if exist("angleflag")
+            maxAng = max(ang_proc,[],"all");
+            minAng = min(ang_proc,[],"all");
+            crange_ang(1) = ceil(minAng);
+            crange_ang(2) = floor(maxAng);
+            fprintf('Angle data detected, plotting scale: %d to %d \n',crange_ang(1),crange_ang(2));
+            end
+
+            figure();
+            tiledlayout(4,1,"TileSpacing","tight");
+            ax1 = nexttile;
+            %a1 = pcolor(ang_t, range, ang_proc);
+            a1 = imagesc(ang_t, range, val);
+            caxis([crange(1) crange(2)]);
+            %set(a1,'EdgeColor','none');
+            cptcmap('EK60_2',ax1')
+            %
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'Xtick',[],'FontSize',16,'LineWidth',1);
+            %cb2 = colorbar(ax2);
+            colorbar;
+            
+            ax4 = nexttile;
+            %a1 = pcolor(ang_t, range, ang_proc);
+            a1 = imagesc(ang_t, range, ang_proc);
+            caxis([crange_ang(1) crange_ang(2)]);
+            %set(a1,'EdgeColor','none');
+            colormap(ax4,redblue);
+            
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'Xtick',[],'FontSize',16,'LineWidth',1);
+            colorbar;
+
+            ax2 = nexttile;
+            [peakValues,peak_idx] = findpeaks(median(val,"omitmissing"),ang_t,'MinPeakProminence',4);
+            plot(ang_t,median(val,"omitmissing"),'LineWidth',2,'Color',"black");
+            hold on
+            plot(peak_idx, peakValues, 'rv', 'LineWidth', 0.5, 'MarkerSize', 8);
+            axis tight;
+            set(gca,'Xtick',[],'FontSize',16,'LineWidth',1);
+
+            ax3 = nexttile;
+            if strcmp(chan_data,'chan70')
+                [peakValues,peak_idx] = findpeaks(-(ang_avg),ang_t,'MinPeakProminence',0.5);
+            elseif strcmp(chan_data,'chan200')
+                [peakValues,peak_idx] = findpeaks(ang_avg,ang_t,'MinPeakProminence',0.5);
+            end
+            plot(ang_t,-(ang_avg),'LineWidth',2,'Color',"black");
+            hold on;
+            % xp = ang_t(peak_idx)
+            % yp = -1*(ang_avg(peak_idx));
+            plot(peak_idx, peakValues, 'rv', 'LineWidth', 0.5, 'MarkerSize', 8);
+            axis tight;
+            %xticks('auto');yticks('auto');
+            xlabel('Time','fontsize',20);
+            set(gca,'FontSize',16);
+            linkaxes([ax1,ax2,ax3,ax4],'x');
+            linkaxes([ax1,ax4],'y');
+        end
+        %% Obtain values surrounding peaks and format into new struct
+        %Index of Peaks are now just vector indexes
+        if strcmp(ctype,'upcast')
+            %[~,peak_idx,~,prompk] = findpeaks(-(ang_avg),'MinPeakProminence',0.5);
+            [~,peak_idx,pkAng_w] = findpeaks(-(ang_avg),'MinPeakProminence',0.5); %Originally used prompk
+            %ctype = 'upcast';
+        elseif strcmp(ctype,'dcast')
+            [~,peak_idx,pkAng_w] = findpeaks(ang_avg,'MinPeakProminence',0.5);
+            %ctype = 'dcast';
+        end
+        
+        med_val = median(val,"omitmissing");
+        [peakSv_val,peakSv_idx,peakSv_wid,prompk] = findpeaks(med_val,'MinPeakProminence',4); %C10 prom 5 does not detect all peaks
+        %Find similar peaks from Sv vs angle
+        peakAng_sim_idx = dsearchn(peak_idx',peakSv_idx'); %This maps idx of ang peaks close to Sv peaks
+        peakAng_dif = peak_idx(~ismember(peak_idx,peak_idx(peakAng_sim_idx))); %idx of ang peaks not similar to Sv peaks
+        pkAng_w = round(pkAng_w);
+        pkAng_w_idx = peak_idx(~ismember(peak_idx,peak_idx(peakAng_sim_idx)) & pkAng_w == 1); %All peaks in Ang that have a width of 1 are included
+        
+        %Find the impulse noise that is "periodic". For MSET it seems to be within 41 seconds. These peaks have a certain prominence
+        peakSv_wid = round(peakSv_wid);
+        peakSv_IN_idx = peakSv_idx(peakSv_wid > 1); %All peak idx with width > 1
+        pkdur_sec = seconds(floor(diff(ang_t(peakSv_IN_idx))));
+        pkdur_n = floor(diff(peakSv_IN_idx));
+
+        %However it will detect peaks in High SNR (Closer to surface and
+        %with SSL). Need to incorporate a SNR metric to not remove this
+        %peak!
+
+        lim_1 = 1; lim_2 = length(ang_t); %Originally using time index. Now just use num indexes
+        peakIN_idx = sort(unique([(peakSv_IN_idx(1) - pkdur_n) (peakSv_IN_idx(end) + pkdur_n) peakSv_idx pkAng_w_idx]));
+        peakIN_idx = peakIN_idx(peakIN_idx > lim_1 & peakIN_idx < lim_2);
+        %Remove double/close overlapping idx
+        peakIN_over = (peakIN_idx(diff(peakIN_idx)==1))+1; %Take the lowest of the overlapping indexes
+        peakIN_idx(ismember(peakIN_idx,peakIN_over)) = []; %remove it
+
+        peak_num = numel(peakIN_idx);
+        mask_array = false(size(val,1),size(val,2));
+
+        fprintf('Processing Cast %d and detected %d impulses\n',cast_proc(n),peak_num)
+
+        %From here, indexes of values are going to be determined based off
+        %a 5 dB threshold surrounding the peak. If there are no values that
+        %are over 5 dB, then the SNR is high and no filtering will be done
+        %at that peak!
+
+        for ii = 1:peak_num
+
+            idx_c = peakIN_idx(ii); %Peak val num idx
+            idx_s = (idx_c - 5);
+            idx_f = (idx_c + 5);
+            if idx_s < 1
+                idx_s = 1;
+            elseif idx_f >= numel(ang_t)
+                idx_f = numel(ang_t);
+            end
+
+            if any(ismember(peak_idx,idx_c)) && any(ismember(peakSv_idx,idx_c))
+                ptype = 'Sv';
+                pwid = peakSv_wid(ismember(peakSv_idx,idx_c));
+            elseif any(ismember(peak_idx,idx_c))
+                ptype = 'ang';
+                pwid = pkAng_w(ismember(peak_idx,idx_c));
+            elseif any(ismember(peakSv_idx,idx_c))
+                ptype = 'Sv';
+                pwid = peakSv_wid(ismember(peakSv_idx,idx_c));
+            else
+                ptype = 'est';
+                pwid = 2;
+            end
+
+            pk_idx_glob = idx_s:idx_f;
+            pk_dif_loc = abs(med_val(idx_s:idx_f) - med_val(idx_c));
+
+            %Mapping to local indexes
+            idx_c_loc = find(pk_dif_loc == 0);
+            pot_idx_loc = pk_dif_loc < 5; %Thresholded
+            %New problem: What if IN width > 1 from angle/estimated?? Need
+            %width/flag for each IN peak from angle/Sv
+            if sum(pot_idx_loc)-pwid > 2 %This is specific for IN from angles with width 1, since the val detector cannot detect them and hence sets all values to 1.
+                pot_idx_loc = false(size(pot_idx_loc,1),size(pot_idx_loc,2));
+                if pwid == 1
+                    pot_idx_loc(idx_c_loc) = true; %This converts all detected values to 0 except the index of the peak with width 1
+                elseif strcmp(ptype,'est')
+                    %pot_idx_loc(idx_c_loc:idx_c_loc+1) = true;
+                    if idx_c < 5 %Close to the starting edge
+                        %pot_idx_loc = pk_dif_loc < 5;
+                        pot_idx_loc(1:idx_c_loc) = true;
+                    %elseif %locate new peak!!
+                    else %This can also work for values near start!! 
+                        [new_pk_val,new_pk_idx_loc] = max(med_val(idx_s:idx_f));
+                        idx_c_loc = new_pk_idx_loc;
+                        idx_c = pk_idx_glob(idx_c_loc);
+                        pk_dif_loc = abs(med_val(idx_s:idx_f) - new_pk_val);
+                        pot_idx_loc = pk_dif_loc < 3; %New threshold
+                        
+                        if sum(pot_idx_loc)-pwid > 2
+                            pot_idx_loc = false(size(pot_idx_loc,1),size(pot_idx_loc,2));
+                        end
+                    end
+                elseif ~strcmp(ptype,'est') & pwid > 1
+                    pot_idx_loc = pk_dif_loc < 5;
+                end
+            end
+
+            pot_idx_loc = find(pot_idx_loc == 1);
+            if idx_c > 5
+                pot_idx_loc_cond = abs(pot_idx_loc - idx_c_loc) < pwid; %Has to be within 3 indexes from peak; Better way: Based on width of the IN!             
+            else %If IN is close to the start, then remove all from 1
+                pot_idx_loc_cond = true(size(pot_idx_loc,1),size(pot_idx_loc,2));
+            end
+
+            %Mapping back to global indexes
+            q = pk_idx_glob(pot_idx_loc(pot_idx_loc_cond)); %Global idx of values to be removed/suspected as IN
+
+            if isempty(q)
+                fprintf('Error encountered when processing impulse %d/%d. Will move to the next impulse\n',ii,peak_num);
+                %error('Q returned empty vector');
+            else
+                mask_array(:,q(1):q(end)) = 1;
+                fprintf('Processed Cast %d impulse %d/%d; Values are replaced with: %s \n',cast_proc(n),ii,peak_num,method)
+            end
+            
+        end
+
+        if strcmp(method,'NaN')
+            out_filt(mask_array) = -999;
+            %elseif strcmp(method,'med')
+        end
+
+        if plot_fig == 1
+            figure()
+            tiledlayout(3,1,'TileSpacing','tight')
+            ax1 = nexttile
+            a1 = imagesc(ang_t, range, val);
+            caxis([crange(1) crange(2)]);
+            cptcmap('EK60_2')
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'Xtick',[],'FontSize',16,'LineWidth',1);
+
+            ax2 = nexttile
+            %alpha = true(size(IN_val_res,1),size(IN_val_res,2));
+            %alpha = true(size(val,1),size(val,2));
+            %alpha(:,q) = 0;
+            alpha = ~mask_array;
+            %a1 = imagesc(datetime(IN_t_res,"ConvertFrom","datenum"), IN_r_res, IN_val_res,'alphadata',alpha);
+            a1 = imagesc(ang_t, range, val,'alphadata',alpha);
+            caxis([crange(1) crange(2)]);
+            cptcmap('EK60_2')
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'Xtick',[],'FontSize',16,'LineWidth',1);
+
+            ax3 = nexttile
+            a1 = imagesc(IN_t, range, data_out);
+            caxis([crange(1) crange(2)]);
+            cptcmap('EK60_2')
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'FontSize',16,'LineWidth',1);
+
+            linkaxes([ax1,ax2,ax3],'x','y');
+
+        end
+        %end
+        
+        %% This is where we do impulse removal and SNR
+
+        svEK80_flyer_filt.(sprintf('C%d',cast_proc(n))) = data_proc.(sprintf('C%d',cast_proc(n)));
+        val_cast(:,idx_proc_d) = out_filt;
+        svEK80_flyer_filt.(sprintf('C%d',cast_proc(n))).(chan_data).val = val_cast;
+        samp_win = [100, 80, 60, 40, 20];
+        for ii=1:5
+            if ii == 1
+                in_out = svEK80_flyer_filt.(sprintf('C%d',cast_proc(n)));
+            end
+            in_in = in_out;
+            in_out = impulse_noise_filter(in_in,'EK80',1,samp_win(ii),2,7,0,105,'NaN',[],[],[]); %100 good
+        end
+        %svEK80_flyer_IN = impulse_noise_filter(svEK80_flyer_filt.(sprintf('C%d',cast_proc(n))),'EK80',1,40,2,7,0,105,'NaN','remove_gap',5,[]);
+        svEK80_flyer_filt.(sprintf('C%d',cast_proc(n))).(chan_data).val = in_out.(chan_data).val;
+        clear data_out q q_idx IN_val
+        fprintf('Filtered IN for cast: %d\n',cast_proc(n));
+    catch err
+        %disp(err.identifier);
+        fprintf('%s for line: %d \n',err.message,err.stack(end).line);
+        fprintf('Filtering failed for cast %d; Moving to the next cast \n',cast_proc(n));
+        %data_proc = rmfield(datain,cast_proc2);
+        svEK80_flyer_filt.(sprintf('C%d',cast_proc(n))) = data_proc.(sprintf('C%d',cast_proc(n)));
+        %svEK80_flyer_filt = rmfield(svEK80_flyer_filt,sprintf('C%d',cast_proc(n)));
+        clear data_out q q_idx IN_val
+    end
+end
+
+
+% Converting cast data to EK data struct 
+svEK80_flyer_filt = flyer_combine_casts(svEK80_flyer_filt); % Combine the seperated casts into one datafile
+data_proc = flyer_combine_casts(data_proc); % Combine the seperated casts into one datafile
+if plot_fig == 1
+    plotEk_Echogram_Niskin(svEK80_flyer_filt,1,[],[],{0 'inf'},[],[crange(1) crange(2)],'EK80 filtered',[]);
+    plotEk_Echogram_Niskin(data_proc,1,[],[],{0 'inf'},[],[crange(1) crange(2)],'EK80 original',[]);
+    %plotEk_Echogram_Niskin(svEK80_flyer_IN,1,[],[],{0 'inf'},[],[-70 -39],'EK80 original',[]);
+end
+%{
+figure()
+%a1 = pcolor(datetime(IN_t_res,"ConvertFrom","datenum"), IN_r_res, IN_val_res);
+a1 = imagesc(datetime(IN_t_res,"ConvertFrom","datenum"), IN_r_res, IN_val_res);
+caxis([crange_ang(1) crange_ang(2)]);
+%set(a1,'EdgeColor','none');
+%ax2.Colormap = redblue;
+colormap(redblue);
+set(gca,'YDir','reverse');
+axis tight;
+ylim([0 100]);
+set(gca,'FontSize',16,'LineWidth',1);
+%cb2 = colorbar(ax2);
+colorbar;
+figure
+findchangepts(ang_avg(idx_s:idx_f),MaxNumChanges=2)
+figure()
+%a1 = pcolor(IN_t(q(1):q(2)), range, IN_val(:,q(1):q(2)));
+%a1 = imagesc(IN_t(q(1):q(2)), range, IN_val(:,q(1):q(2)));
+a1 = imagesc(IN_t, range, IN_val);
+caxis([crange_ang(1) crange_ang(2)]);
+%set(a1,'EdgeColor','none');
+%ax2.Colormap = redblue;
+colormap(redblue);
+set(gca,'YDir','reverse');
+axis tight;
+ylim([0 100]);
+set(gca,'FontSize',16,'LineWidth',1);
+%cb2 = colorbar(ax2);
+colorbar;
+figure()
+imagesc(ang_t, range, out_filt,[crange(1) crange(2)]);
+%caxis([crange(1) crange(2)]);
+%set(a1,'EdgeColor','none');
+%ax2.Colormap = redblue;
+cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1]; colormap(cmap);
+% colormap(redblue);
+set(gca,'YDir','reverse');
+axis tight;
+ylim([0 100]);
+set(gca,'FontSize',16,'LineWidth',1);
+%cb2 = colorbar(ax2);
+colorbar;
+figure()
+imagesc(ang_t, range, val,[crange(1) crange(2)]);
+%caxis([crange(1) crange(2)]);
+%set(a1,'EdgeColor','none');
+%ax2.Colormap = redblue;
+cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1]; colormap(cmap);
+% colormap(redblue);
+set(gca,'YDir','reverse');
+axis tight;
+ylim([0 100]);
+set(gca,'FontSize',16,'LineWidth',1);
+%cb2 = colorbar(ax2);
+colorbar;
+%}
+end

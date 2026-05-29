@@ -1,0 +1,17 @@
+2026-5-11: Huge changes
+1. new flyer parser that is much quicker than previous version. (ek80parser_flyer_v2 and ek80parser_flyer_v2_parfor)
+2. parfor seems stable for flyer parsing (6 cores, 32gb ram )
+3. new EK80 data loader: EK80_load_files and EK80_load_files_parfor -> can call directly all files
+4. output struct is different now.
+5. test svf dataset is in test_freq folder
+6. all these changes are in 2026-5-11_newEK80_test_script.m
+5. TODO: implement fix cast during parsing if we can! 
+
+
+2025-11-7: Svf matlab issues:
+1. f_m is f in matlab. Same
+2. calc_g in python does calc b_theta first which determines a gain offset that is dependendent on location of scatterer in beam
+for this case, it is calculated for targets on axis (theta=0). Add in this into the matlab code. 
+3. Problem: Gain is calculated wrong (conversion to double from string). Fixed in this code!
+4. For now no overlap contribution. Now overlap is 99%
+

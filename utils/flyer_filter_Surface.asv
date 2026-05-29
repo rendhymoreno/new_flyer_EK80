@@ -1,0 +1,655 @@
+function svEK80_flyer_filt = flyer_filter_Surface(datain, angle, cast_proc, crange, method, rmv, plot_fig)
+
+fn = char(fieldnames(datain));
+if strcmp(fn(1:4),'chan')
+    [datain,cl,ci] = flyer_cast_idx(datain, 1); % obtain casts and fix the cast numbering: There are some errors when 
+    datain = flyer_query_castData(datain, 1, [], []); %Emptying this fixes cast numbering
+end
+
+cast_list = fieldnames(datain);
+for k=1:length(cast_list)
+    cast_num(k) = str2double(cast_list{k}(2:end));
+end
+
+chan_data = string(fieldnames(datain.(cast_list{1})));
+chan_ang = string(fieldnames(angle));
+
+if ismember(chan_data,chan_ang)
+    chan_id = find(chan_ang == chan_data);
+else
+    error('Channel between data and angle is not consistent!')
+end
+
+if isempty(cast_proc)
+    cast_proc = cast_num;   
+end
+
+angle_med = conv_filter(angle,'EK80',1,3,'median',[]);
+time = datetime([angle.(chan_data{chan_id}).vars.timestamp],"ConvertFrom","epochtime","TicksPerSecond",1e6);
+range = [angle.((chan_data{chan_id})).range];
+vars = [angle.((chan_data{chan_id})).vars];
+ang_val = [angle.((chan_data{chan_id})).val];
+ang_medval = [angle_med.((chan_data{chan_id})).val];
+depth = [vars.depth];
+
+if ~isfield(vars,'cast_new')
+    [angle,~,~] = flyer_cast_idx(angle, 1);
+    vars = [angle.((chan_data{chan_id})).vars];
+end
+
+%% Check for angle data if its correct
+if ~strcmp(angle.(chan_ang{1}).type,'PhysAng_alongship') && ~strcmp(angle.(chan_ang{1}).type,'PhysAng_athwartship')
+    error('Angle data is not detected as an input')
+else
+    angleflag = 1;
+end
+
+for n=1:length(cast_proc)
+    if n==1
+        fprintf('Detected %d casts',length(cast_proc))
+        fprintf(': %s\n',join(string(cast_proc)));  
+    end
+    fprintf('Processing cast: %d\n',cast_proc(n));
+    cast_plt_idx = ~ismember(cast_num,cast_proc(n));
+    cast_proc2 = cast_list(cast_plt_idx);
+    data_proc = rmfield(datain,cast_proc2);
+    if n==1
+        svEK80_flyer_filt = data_proc;
+    else
+        svEK80_flyer_filt.(sprintf('C%d',cast_proc(n))) = data_proc.(sprintf('C%d',cast_proc(n)));
+    end
+
+    %% Parse angle cast and depth data
+    try
+        c_idx = ismember([vars.cast_new],cast_proc(n));
+        ang_proc = ang_val(:,c_idx);
+        ang_medproc = ang_medval(:,c_idx);
+        ang_t = time(c_idx);
+        dep_proc = depth(c_idx);
+        if max(dep_proc) < 50 & abs(dep_proc(1)-dep_proc(end)) < 20
+            error('Cast is not a downcast or upcast. Will not process')
+        end
+        val_cast = data_proc.(sprintf('C%d',cast_proc(n))).(chan_data).val;
+        vars2 = [vars(c_idx)];
+        idx_proc = find(c_idx == 1); %Index of casts
+        depth_interval = [0 50]; %initial depth interval
+
+        if ~isempty(depth_interval)
+            d_idx = dep_proc > depth_interval(1) & dep_proc < depth_interval(2);
+            %c_idx = c_idx & c_idx_2; %intersect between depth and cast
+            ang_proc = ang_proc(:,d_idx);
+            ang_medproc = ang_medproc(:,d_idx);
+            ang_t = ang_t(d_idx);
+            dep_proc = dep_proc(d_idx);
+            val = val_cast(:,d_idx);
+            vars2 = [vars2(d_idx)];
+            idx_proc_d = find(d_idx == 1); %Index of casts; This maps directly to data_proc/local cast indexes
+        end
+
+        %% Find minimum value of angle average (corresponds to lower limit of surface detection)
+        ang_avg = mean(ang_medproc,1); %from 0 - 50 m
+        [~,min_idx] = min(ang_avg); %idx from 0 to 50 m
+        [~,max_idx] = max(ang_avg); %idx from 0 to 50 m
+
+        if max_idx == 1
+            disp('Max ang_avg is erroneus. Locating the second highest ang_avg')
+            [pk_mx,mx_idx] = findpeaks(ang_avg);
+            [~,mx_idx2] = max(pk_mx);
+            max_idx = mx_idx(mx_idx2);
+            max_flag = 1;
+        end
+
+        %min_idx_cast = idx_proc(idx_proc_d(min_idx)); %idx global cast
+        %max_idx_cast = idx_proc(idx_proc_d(max_idx)); %idx global cast
+        surf_interval = [0 dep_proc(max_idx)+35]; % Sometimes more than 20
+
+        % Another query of data from new depth interval (from min to 0)
+        d_idx_surf = dep_proc > surf_interval(1) & dep_proc <= surf_interval(2);
+        idx_proc_surf = idx_proc_d(min_idx):idx_proc_d(end); %Index of 0 - 50m subset from min to end
+        idx_proc_surf_c = find(d_idx_surf == 1); %Maps from subsetted surf array to depth_interval cast (0-50)
+        val_s = val_cast(:,d_idx_surf);
+        ang_proc_s = ang_proc(:,d_idx_surf);
+        ang_t_s = ang_t(d_idx_surf);
+        ang_med_s = ang_medproc(:,d_idx_surf);
+        ang_avg_s = ang_avg(d_idx_surf);
+
+        % Find the 2nd widest/prominent peak which is correlated as having surface returns
+        % (widest peak)
+
+        min_surf_sbs_idx = find(idx_proc_surf_c == min_idx); %Index in surf
+
+        if isempty(min_surf_sbs_idx) %Sometimes min glob is not in surf
+            min_surf_sbs_idx = 1; %Set the minimum to surf(1)
+            spoint = 'surf';
+            min_flag = 1;
+        elseif dep_proc(min_idx) < 12
+            min_surf_sbs_idx = 1; %Set the minimum to surf(1)
+            spoint = 'surf';
+            disp('Min ang_avg is detected under 12 meters. Using surf as a starting point')
+            min_flag = 1;
+        end
+
+        max_surf_sbs_idx = find(idx_proc_surf_c == max_idx); %Index in surf
+        [pks,locs,widths] = findpeaks(ang_avg_s,'MinPeakProminence',1,'Annotate','extents');
+        if isempty(pks)
+            prom = 1;
+            np = 0;
+            iter = 1;
+            while (isempty(pks) | np < 1) & iter < 10
+                [pks,locs,widths] = findpeaks(ang_avg_s,'MinPeakProminence',prom,'Annotate','extents');
+                if isempty(pks) | (numel(pks) == 1 & locs == max_surf_sbs_idx)
+                    prom = prom/2;
+                    fprintf('Peak searching will repeat with prominence %d\n',prom);
+                else
+                    np = numel(pks);
+                    fprintf('%d Peaks found\n',numel(pks));
+                end
+                iter = iter + 1;
+            end
+
+        end
+        %figure(); findpeaks(ang_avg_s,'MinPeakProminence',1,'Annotate','extents');
+        if numel(pks) == 1 & locs == max_surf_sbs_idx %If the only peak found is equal to global max, find another one
+
+            if 1 < min_surf_sbs_idx %Check if glob min idx > surf
+
+                if min_surf_sbs_idx > max_surf_sbs_idx % Glob min is over glob max
+                    temp_peak_idx = [1:max_surf_sbs_idx];
+                    spoint = 'surf';
+                    disp('Glob min supersedes glob max. Using surf as starting point')
+                elseif min_surf_sbs_idx < max_surf_sbs_idx
+                    temp_peak_idx = [min_surf_sbs_idx:max_surf_sbs_idx]; %Index in surf: Glob min as start
+                    spoint = 'glob_min';
+                    disp('Using glob min as starting point')
+                end
+
+            else %Anything else then use the surf index as first!! %f
+                temp_peak_idx = [1:max_surf_sbs_idx];
+                spoint = 'surf';
+                disp('Glob min does not exist. Using surf as starting point')
+            end
+            disp('Found 1 peak at global maxima. Locating another peak')
+
+            [pks2,locs2] = findpeaks(ang_avg_s(temp_peak_idx)); %local index
+
+            if numel(pks2) > 1
+                disp('Multiple peaks detected, using 1st peak value')
+                pks2_filt = pks2 < mean(ang_avg_s); %
+                if isempty(pks2_filt) | sum(pks2_filt) == 0
+                    pks2 = [];
+                else
+                    pks2 = pks2(pks2_filt); locs2 = locs2(pks2_filt);
+                    pks2 = pks2(1); locs2 = locs2(1); %Take the first peak
+                end
+                
+            end
+
+            if ~isempty(pks2) & strcmp(spoint,'surf')  %If a new peak is found and glob min is empty
+                if abs(locs2(1)-temp_peak_idx(end)) < abs(locs2(1)-temp_peak_idx(1)) %closer to surf
+                    sec_pk_idx = [idx_proc_surf_c(temp_peak_idx(1)) size(ang_medproc,2)]; %%Use peak as starting point; Back to 0-50 index
+                    disp('Erroneous Peak (closer to glob max). Proc values: Surf to end')
+                elseif abs(locs2(1)-temp_peak_idx(end)) > abs(locs2(1)-temp_peak_idx(1)) %Closer to glob max
+                    sec_pk_idx = [idx_proc_surf_c(locs2(1)) size(ang_medproc,2)];
+                    disp('Glob min location < Surf < Peak loc. Proc values: Peak to end')
+                elseif abs(locs2(1)-temp_peak_idx(end)) == abs(locs2(1)-temp_peak_idx(1))
+                    sec_pk_idx = [idx_proc_surf_c(temp_peak_idx(1)) size(ang_medproc,2)]; %%Use peak as starting point; Back to 0-50 index
+                    disp('Peak is equally between Surf and Glob Max. Proc values: Surf to end')
+                end
+            elseif ~isempty(pks2) & strcmp(spoint,'glob_min') %if new peak found and glob min exists then start to glob minima
+                sec_pk_idx = [min_idx size(ang_medproc,2)]; %Use min as start. But problem with glob min ahead of peak?? Back to 0-50 index
+                disp('Surf < Glob min location < Peak loc. Proc values: Glob min to end')
+                %iffy; need to change this!
+            elseif isempty(pks2) % Could not find peak: set starting point to surf/glob min
+                sec_pk_idx = [idx_proc_surf_c(temp_peak_idx(1)) size(ang_medproc,2)]; %Back to 0-50 index
+                if strcmp(spoint,'surf')
+                    disp('No peaks detected. Proc values: Surf to end')
+                elseif strcmp(spoint,'glob_min')
+                    disp('No peaks detected. Proc values: Globmin to end')
+                end
+            end
+
+        elseif numel(pks) >= 2 % This indicates there is a clear separation
+            %Need to debug to find out
+            pks(locs == max_surf_sbs_idx) = [];
+            locs(locs == max_surf_sbs_idx) = [];
+            pks_filt = pks < mean(ang_avg_s); %
+            pks = pks(pks_filt); locs = locs(pks_filt);
+            %Assuming locs is 1, if more need to incorporate => Take the first peak!!
+
+            if 1 < min_surf_sbs_idx %Check if glob min idx > surf
+                %temp_peak_idx = [min_surf_sbs_idx:max_surf_sbs_idx]; %Index in surf: Glob min as start
+                if min_surf_sbs_idx > max_surf_sbs_idx % Glob min is over glob max
+                    spoint = 'surf';
+                    disp('Glob min supersedes glob max. Using surf as starting point')
+                elseif min_surf_sbs_idx < max_surf_sbs_idx
+                    spoint = 'glob_min';
+                    disp('Using glob min as starting point')
+                end
+            else %Anything else then use the surf index as first!!
+                %temp_peak_idx = [1:max_surf_sbs_idx];
+                spoint = 'surf';
+                disp('Glob min does not exist. Using surf as starting point')
+            end
+
+            if isempty(pks)
+                if strcmp(spoint,'glob_min')
+                    sec_pk_idx = [min_idx size(ang_medproc,2)]; %Use Back to 0-50 idx
+                    disp('Found 2 peaks but none fit criteria. Surf < Glob min < Peak location. Proc values: Glob min to end')
+                elseif strcmp(spoint,'surf')
+                    sec_pk_idx = [idx_proc_surf_c(1) size(ang_medproc,2)]; %Back to 0-50 index
+                    disp('Found 2 peaks but none fit criteria. Proc values: Surf to end')
+                end
+            elseif locs(1) < min_surf_sbs_idx %Check if glob min idx > peak
+                if strcmp(spoint,'surf')
+                    sec_pk_idx = [idx_proc_surf_c(1) size(ang_medproc,2)]; % Use the peak as the 1st value Back to 0-50 idx
+                    disp('Found 2 peaks. Using 1st peak but glob min is erroneus. Surf < Peak loc < Glob min location. Proc values: Surf to end')
+                elseif strcmp(spoint,'glob_min')
+                    sec_pk_idx = [idx_proc_surf_c(locs(1)) size(ang_medproc,2)]; % Use the peak as the 1st value Back to 0-50 idx
+                    disp('Found 2 peaks. Using 1st peak. Surf < Peak loc < Glob min location. Proc values: Peak to end')
+                end
+            elseif min_surf_sbs_idx < locs(1) & strcmp(spoint,'glob_min')  % if the peak is ahead of min and glob min exists
+                sec_pk_idx = [min_idx size(ang_medproc,2)]; %Use Back to 0-50 idx
+                disp('Found 2 peaks. Using 1st peak. Surf < Glob min < Peak location. Proc values: Glob min to end')
+            elseif min_surf_sbs_idx < locs(1) & strcmp(spoint,'surf')  % if the peak is ahead of min but glob min doesnt exist
+                if abs(locs(1)-max_surf_sbs_idx) < abs(locs(1)-min_surf_sbs_idx) % if true, peak is closer to glob max
+                    sec_pk_idx = [idx_proc_surf_c(1) size(ang_medproc,2)]; %Back to 0-50 index
+                    disp('Found 2 peaks. 1st peak is erroneus. Proc values: Surf to end')
+                elseif abs(locs(1)-max_surf_sbs_idx) > abs(locs(1)-min_surf_sbs_idx) % If peak is closer to surf: likely good peak
+                    sec_pk_idx = [idx_proc_surf_c(locs(1)) size(ang_medproc,2)];
+                    disp('Found 2 peaks. Using 1st peak. Glob min < Surf < Peak location. Proc values: Peak to end')
+                end
+
+            end
+
+        elseif numel(pks) == 1 & locs ~= max_surf_sbs_idx
+            if 1 < min_surf_sbs_idx %Check if glob min idx > surf
+                %temp_peak_idx = [min_surf_sbs_idx:max_surf_sbs_idx]; %Index in surf: Glob min as start
+                if min_surf_sbs_idx > max_surf_sbs_idx % Glob min is over glob max
+                    spoint = 'surf';
+                    disp('Glob min supersedes glob max. Using surf as starting point')
+                elseif min_surf_sbs_idx < max_surf_sbs_idx
+                    spoint = 'glob_min';
+                    disp('Using glob min as starting point')
+                end
+            else %Anything else then use the surf index as first!!
+                %temp_peak_idx = [1:max_surf_sbs_idx];
+                spoint = 'surf';
+                disp('Glob min does not exist. Using surf as starting point')
+            end
+
+            if locs(1) > 1 & strcmp(spoint,'surf')
+                sec_pk_idx = [idx_proc_surf_c(1) size(ang_medproc,2)];
+                disp('Found 1 unknown peak and no glob min. Glob min < Surf < Peak location. Proc values: Surf to end')
+            elseif (1 < min_surf_sbs_idx & locs > min_surf_sbs_idx) & strcmp(spoint,'glob_min') %Check if glob min idx > surf
+                sec_pk_idx = [min_idx size(ang_medproc,2)];
+                disp('Found 1 unknown peak but glob min exists. Surf < Glob min < Peak location. Proc values: Glob min to end')
+            elseif 1 < min_surf_sbs_idx & locs < min_surf_sbs_idx %Glob min > Surf with unknown peak
+                sec_pk_idx = [idx_proc_surf_c(1) size(ang_medproc,2)];
+                disp('Found 1 unknown peak, glob min ahead of peak. Surf < Peak location < Glob min. Proc values: Surf to end')
+            end
+        end
+
+        fprintf('Possible surface returns are seen in flyer depth: %d to 0 m \n',floor(dep_proc(sec_pk_idx(1))));
+        %% Figure
+
+        if plot_fig == 1
+            if exist("angleflag")
+                maxAng = max(ang_proc,[],"all");
+                minAng = min(ang_proc,[],"all");
+                crange_ang(1) = ceil(minAng);
+                crange_ang(2) = floor(maxAng);
+                fprintf('Angle data detected, plotting scale: %d to %d \n',crange_ang(1),crange_ang(2));
+            end
+
+            figure()
+            tiledlayout(3,1,"TileSpacing","tight");
+
+            ax1 = nexttile;
+            %a1 = pcolor(ang_t, range, ang_proc);
+            a1 = imagesc(ang_t, range, val);
+            %a1 = imagesc(ang_t, range, val_cast);
+            caxis([crange(1) crange(2)]);
+            %set(a1,'EdgeColor','none');
+            %ax2.Colormap = redblue;
+            cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1];
+            colormap(cmap);
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'Xtick',[],'FontSize',16,'LineWidth',1);
+            %cb2 = colorbar(ax2);
+            colorbar;
+
+            ax2 = nexttile;
+            %a1 = pcolor(ang_t, range, ang_proc);
+            a1 = imagesc(ang_t, range, ang_medproc);
+            caxis([crange_ang(1) crange_ang(2)]);
+            %set(a1,'EdgeColor','none');
+            %ax2.Colormap = redblue;
+            colormap(ax2,redblue);
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'Xtick',[],'FontSize',16,'LineWidth',1);
+            %cb2 = colorbar(ax2);
+            colorbar;
+
+            ax3 = nexttile;
+            plot(ang_t,ang_avg,'LineWidth',2,'Color',"black");
+            hold on;
+            plot(ang_t(min_idx), ang_avg(min_idx), 'rv', 'LineWidth', 0.5, 'MarkerSize', 8);
+            plot(ang_t(max_idx), ang_avg(max_idx), 'rv', 'LineWidth', 0.5, 'MarkerSize', 8);
+            plot(ang_t(sec_pk_idx(1)), ang_avg(sec_pk_idx(1)), 'ro', 'LineWidth', 2, 'MarkerSize', 15);
+            axis tight;
+            set(gca,'FontSize',16,'LineWidth',1);
+
+            linkaxes([ax1,ax2,ax3],'x');
+            linkaxes([ax1,ax2],'y');
+
+            
+            figure()
+            tiledlayout(3,1,"TileSpacing","tight");
+
+            ax4 = nexttile;
+            %a1 = pcolor(ang_t, range, ang_proc);
+            a1 = imagesc(time(c_idx), range, val_cast);
+            caxis([crange(1) crange(2)]);
+            %set(a1,'EdgeColor','none');
+            %ax2.Colormap = redblue;
+            cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1];
+            colormap(cmap);
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'Xtick',[],'FontSize',16,'LineWidth',1);
+            %cb2 = colorbar(ax2);
+            colorbar;
+
+            ax5 = nexttile;
+            %a1 = pcolor(ang_t, range, ang_proc);
+            a1 = imagesc(time(c_idx), range, ang_medval(:,c_idx));
+            caxis([crange_ang(1) crange_ang(2)]);
+            %set(a1,'EdgeColor','none');
+            %ax2.Colormap = redblue;
+            colormap(ax5,redblue);
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'Xtick',[],'FontSize',16,'LineWidth',1);
+            %cb2 = colorbar(ax2);
+            colorbar;
+
+            ax6 = nexttile;
+            plot(time(c_idx),mean(ang_medval(:,c_idx),1),'LineWidth',2,'Color',"black");
+            hold on;
+            plot(ang_t_s(ang_avg_s==max(ang_avg_s)), ang_avg_s(ang_avg_s==max(ang_avg_s)), 'rv', 'LineWidth', 0.5, 'MarkerSize', 8);
+            axis tight;
+            set(gca,'FontSize',16,'LineWidth',1);
+
+            linkaxes([ax4,ax5],'x','y');
+            linkaxes([ax4,ax5,ax6],'x');
+            %}
+        end
+
+
+        %% K-means clustering
+
+        % Processing data using the depth indexed data and indexed from surface detection
+        %idx_s2dep = sec_pk_idx(end) - idx_max;
+        val_s = val(:,sec_pk_idx(1):sec_pk_idx(end));
+        ang_t_s = ang_t(sec_pk_idx(1):sec_pk_idx(end));
+        ang_med_s = ang_medproc(:,sec_pk_idx(1):sec_pk_idx(end));
+        ang_avg_s = ang_avg(sec_pk_idx(1):sec_pk_idx(end));
+
+        if (exist("min_flag","var") & exist("max_flag","var")) & (abs(floor(dep_proc(sec_pk_idx(1))) - 50) <= 10)
+            val_s_rm = val_cast;
+            val_s_rm(val_s_rm > -55) = NaN;
+            error('This cast has a different structure like others. Will not filter but only threshold')
+        end
+
+        if strcmp(method,'kmeans')
+            [idx_k] = kmeans(ang_med_s(:),3);
+            KM = reshape(idx_k,[length(range),length(ang_t_s)]);
+            KM_remove = val_s;
+
+            val_s_rm = val_cast; %Full cast data
+            % Find which cluster is the surface from max angles
+            [~,clusidx] = max(ang_med_s,[],"all");
+            clus_s = KM(clusidx);
+            
+            % only take clusters related to clear surface detections 
+            idx_KM = KM == clus_s;
+            KM(~idx_KM) = NaN;
+            
+            % Do a median conv filter (2x2) to smoothen data and binarize
+            KM_med = medfilt2(KM,[2 2]);
+            KM_bin = im2bw(KM_med);
+
+            % Apply morphological filt (image proc) using close and open filters
+            se = strel("rectangle",[3 1]); %This is rectangular structuring element
+            se2 = strel("rectangle",[3 3]); %This is square structuring element
+            KM_c = imclose(KM_bin,se);
+            KM_c_f = bwareaopen(KM_c, 100); %Removes artifacts under 100 pixels
+            KM_f = imopen(KM_c_f,se2);
+            
+            % Now take every cluster pixel and grab the left most pixel of every return over time
+            [clus_i,clus_j] = find(KM_f == 1);
+            clus_i_un = unique(clus_i);
+            for ii=1:length(clus_i_un)
+                temp_row = clus_i_un(ii);
+                temp_row_idx = ismember(clus_i,temp_row);
+                temp_col_idx = clus_j(temp_row_idx);
+                pot_clus_idx(ii,:) = [temp_row min(temp_col_idx)];
+            end
+            
+            %Removing clusters at the "near-field" of transducer using empirical values. 
+            pot_clus_idx(pot_clus_idx(:,1) < 250 & pot_clus_idx(:,2) <= floor(size(KM_f,2)/2),:) = NaN; 
+            
+            %Add the lower left and upper right edges as points
+            pot_clus_idx = [size(KM_f,1) 1; 1 size(KM_f,2); pot_clus_idx];
+            clus_col = unique(pot_clus_idx(:,2));
+
+            %Reduce the clusters to singular values per ping. Take the "shallowest" value per one ping.
+            
+            for jj=1:length(clus_col)
+                temp_col_idx = ismember(pot_clus_idx(:,2),clus_col(jj));
+                temp_row_idx = pot_clus_idx(:,1);
+                temp_row_idx = temp_row_idx(temp_col_idx);
+                surf_points(jj,:) = [min(temp_row_idx) clus_col(jj)];
+            end
+            
+            % Now we have all of the "edges" of clusters. We need to project a line/linear function of where backscatter values
+            % will be removed
+            surf_points = sortrows(surf_points,'descend');
+            
+            % Starting and ending points of this function are obtained by splitting the matrix into 4 quadrants. The lower left
+            % quadrant is Qlow while the upper right is Qhigh. If Qlow has no other points than the lower edge, it will search the next
+            % quadrant above it
+            
+            surf_crv = zeros(2,2);
+            Qlow = surf_points(:,1) > floor(size(KM_f,1)/2) & surf_points(:,2) < floor(size(KM_f,2)/2);
+            str_surf = surf_points(Qlow,:);
+            if sum(Qlow) == 1 && str_surf(1) == size(KM_f,1) && str_surf(2) == 1
+                Qlow = surf_points(:,1) < floor(size(KM_f,1)/2) & surf_points(:,2) < floor(size(KM_f,2)/2);
+                str_surf = surf_points(Qlow,:);
+                if isempty(str_surf)
+                    surf_crv(1,1) = size(KM_f,1); 
+                    surf_crv(1,2) = 1;
+                else
+                    surf_crv(1,1) = max(str_surf(:,1)); 
+                    surf_crv(1,2) = 1;
+                end
+            else
+                str_surf = sortrows(str_surf,[1 2]);
+                surf_crv(1,1) = floor(median(str_surf(:,1))); 
+                surf_crv(1,2) = 1;
+            end
+
+            Qhigh = surf_points(:,1) < floor(size(KM_f,1)/2) & surf_points(:,2) > floor(size(KM_f,2)/2);
+            end_surf = surf_points(Qhigh,:);
+            end_surf = sortrows(end_surf,[2],'ascend');
+            surf_crv(2,2) = floor(median(end_surf(:,2))); 
+            surf_crv(2,1) = 1;
+            
+            % Now generate the function/line using the start and endpoints
+            p = polyfit(surf_crv(:,2),surf_crv(:,1),1);
+            s_thres = round(polyval(p,1:size(KM,2)));
+            s_thres(s_thres < 1) = 1; %Samples under this line are removed 
+            
+            % Removing samples based on line and cluster
+            for kk=1:length(s_thres)
+                KM_remove(s_thres(kk):end,kk) = NaN;
+            end
+            KM_remove(idx_KM) = NaN;
+            
+            val_s_rm(:,idx_proc_d(sec_pk_idx(1)):idx_proc_d(sec_pk_idx(2))) = KM_remove;
+            val_s_rm(:,idx_proc_d(max_idx):end) = NaN; % Remove values after global max
+            val_s_rm(val_s_rm > -55) = NaN;
+
+
+            % Old method of removing surface
+            % sum_clus = zeros(3,length(ang_t_s));
+            % sum_clus(1,:) = sum(KM == 1);
+            % sum_clus(2,:) = sum(KM == 2);
+            % sum_clus(3,:) = sum(KM == 3);
+            % idx_max_clus = length(ang_t_s) - (sec_pk_idx(end) - max_idx);  %find(ang_avg_s == max(ang_avg_s));
+            % [~,dom_idx] = sort([sum(sum_clus(1,idx_max_clus-4:idx_max_clus),"all"); sum(sum_clus(2,idx_max_clus-4:idx_max_clus),"all");....
+            %     sum(sum_clus(3,idx_max_clus-4:idx_max_clus),"all")],'descend');
+            % idx_KM = KM == dom_idx(1) | KM == dom_idx(2);
+
+
+            %val_cast(:,idx_proc_d(min_idx):end) = val_s_rm; %idx_proc_d(min_idx) is index of cast data where minimum of ang_avg is located
+        elseif isempty(method)
+            val_s_rm = val_cast;
+            val_s_rm(:,idx_proc_d(sec_pk_idx(1)):idx_proc_d(sec_pk_idx(2))) = NaN;
+        end
+
+        %% Re-Mapping back removed values to cast values
+        %
+        svEK80_flyer_filt.(sprintf('C%d',cast_proc(n))).(chan_data).val = val_s_rm;
+        fprintf('Sucessfully filtered surface returns for cast %d\n',cast_proc(n));
+
+        if plot_fig == 1
+            figure()
+            tiledlayout(2,1,"TileSpacing","tight")
+
+            nexttile;
+            a1 = imagesc(ang_t_s, range, KM);
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'FontSize',16,'LineWidth',1);
+            %cb2 = colorbar(ax2);
+            colorbar;
+
+            nexttile;
+            %figure()
+            a1 = imagesc(ang_t_s, range, val_s_rm(:,idx_proc_d(sec_pk_idx(1)):idx_proc_d(sec_pk_idx(2))));
+            set(gca,'YDir','reverse');
+            axis tight;
+            caxis([crange(1) crange(2)]);
+            cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1];
+            colormap(cmap);
+            set(gca,'YDir','reverse');
+            ylim([0 100]);
+            set(gca,'FontSize',16,'LineWidth',1);
+            %cb2 = colorbar(ax2);
+            colorbar;
+            
+
+            figure();
+            tiledlayout(3,1,"TileSpacing","tight")
+            nexttile
+            a1 = imagesc(ang_t_s, range, KM);
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'XTick',[],'FontSize',16,'LineWidth',1);
+            
+            nexttile %BW2 = imfill(BW,'holes');
+            a1 = imagesc(ang_t_s, range, KM_med);
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'XTick',[],'FontSize',16,'LineWidth',1);
+
+            nexttile
+            a1 = imagesc(ang_t_s, range, KM_f);
+            set(gca,'YDir','reverse');
+            axis tight;
+            ylim([0 100]);
+            set(gca,'FontSize',16,'LineWidth',1);
+
+            figure()
+            scatter(surf_points(:,2),surf_points(:,1),10,'filled');
+            hold on
+            plot(surf_crv(:,2),surf_crv(:,1),'r','MarkerSize',15)
+            set(gca,'YDir','reverse','XLim',[1 size(KM_f,2)],'YLim',[1 size(KM_f,1)]);
+
+        end
+        % figure()
+        % tiledlayout(2,1,"TileSpacing","tight")
+        % ax1 = nexttile;
+        % a1 = imagesc(ang_t_s, range, val_s);
+        % caxis([crange(1) crange(2)]);
+        % cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1];
+        % colormap(cmap);
+        % set(gca,'YDir','reverse');
+        % axis tight;
+        % ylim([0 100]);
+        % set(gca,'Xtick',[],'FontSize',16,'LineWidth',1);
+        % %cb2 = colorbar(ax2);
+        % colorbar;
+        %
+        % ax2 = nexttile;
+        % a1 = imagesc(ang_t_s, range, val_s_rm);
+        % caxis([crange(1) crange(2)]);
+        % cmap = cptcmap('EK60_2.cpt'); cmap(1,:) = [1 1 1];
+        % colormap(cmap);
+        % set(gca,'YDir','reverse');
+        % axis tight;
+        % ylim([0 100]);
+        % set(gca,'FontSize',16,'LineWidth',1);
+        % cb2 = colorbar(ax2);
+
+
+    catch ME
+        warning('Something wrong when processing this cast: Possibly flyer not near surface in this cast!')
+        fprintf('%s for line: %d \n',ME.message,ME.stack(end).line);
+        
+        if ME.stack(end).line == 70 | ME.stack(end).line == 403 %Error is due to not an upcast/downcast (early casts)
+            if ME.stack(end).line == 403
+                svEK80_flyer_filt.(sprintf('C%d',cast_proc(n))).(chan_data).val = val_s_rm;
+                fprintf('Processing cast: %d failed and data was not altered. Moving on to next \n',cast_proc(n));
+            else
+                fprintf('Processing cast: %d failed and data was not altered. Moving on to next \n',cast_proc(n));
+            end
+        end
+
+        if ME.stack(end).line > 386 & ME.stack(end).line ~= 403 % Error is not in k-means but before (possibly no surface)
+
+            if strcmp(rmv,'remove')
+                val_s_rm(:,idx_proc_d(sec_pk_idx(1)):idx_proc_d(sec_pk_idx(2))) = NaN;
+                fprintf('Processing cast: %d failed but removed all values from surf to end. \n',cast_proc(n));
+            end
+            svEK80_flyer_filt.(sprintf('C%d',cast_proc(n))).(chan_data).val = val_s_rm;
+            fprintf('Processing cast: %d failed and data was not altered. Moving on to next \n',cast_proc(n));
+            fprintf('Sucessfully filtered surface returns for cast %d\n',cast_proc(n));
+        end
+    end
+
+end
+
+% Converting cast data to EK data struct
+svEK80_flyer_filt = flyer_combine_casts(svEK80_flyer_filt); % Combine the seperated casts into one datafile
+data_proc = flyer_combine_casts(data_proc); % Combine the seperated casts into one datafile
+
+if plot_fig == 1
+    plotEk_Echogram_Niskin(svEK80_flyer_filt,1,[],[],{0 'inf'},[],[-70 -39],'EK80 filtered',[]);
+    plotEk_Echogram_Niskin(data_proc,1,[],[],{0 'inf'},[],[-70 -39],'EK80 original',[]);
+    %plotEk_Echogram_Niskin(svEK80_flyer_IN,1,[],[],{0 'inf'},[],[-70 -39],'EK80 original',[]);
+end
+
+
+end
+
